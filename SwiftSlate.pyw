@@ -26,6 +26,8 @@ WM_INPUT = 0x00FF
 WM_DESTROY = 0x0002
 WM_KEYDOWN = 0x0100
 WM_SYSKEYDOWN = 0x0104
+WM_TIMER = 0x0113
+TRIGGER_TIMER_ID = 1
 RIDEV_INPUTSINK = 0x00000100
 RID_INPUT = 0x10000003
 RIM_TYPEKEYBOARD = 1
@@ -55,6 +57,8 @@ WM_RBUTTONUP = 0x0205
 TPM_RETURNCMD = 0x0100
 TPM_RIGHTBUTTON = 0x0002
 MF_STRING = 0x0000
+MF_SEPARATOR = 0x0800
+MENU_ID_SETTINGS = 1001
 MENU_ID_EXIT = 1002
 
 # --- Win32 API ---
@@ -205,6 +209,26 @@ class RAWKEYBOARD(ctypes.Structure):
                 ("Reserved", wt.USHORT), ("VKey", wt.USHORT),
                 ("Message", wt.UINT), ("ExtraInformation", wt.ULONG)]
 
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wt.DWORD),
+        ("flags", wt.DWORD),
+        ("hwndActive", wt.HWND),
+        ("hwndFocus", wt.HWND),
+        ("hwndCapture", wt.HWND),
+        ("hwndMenuOwner", wt.HWND),
+        ("hwndMoveSize", wt.HWND),
+        ("hwndCaret", wt.HWND),
+        ("rcCaret", wt.RECT),
+    ]
+
+user32.SetTimer.argtypes = [wt.HWND, ULONG_PTR, wt.UINT, ctypes.c_void_p]
+user32.SetTimer.restype = ULONG_PTR
+user32.KillTimer.argtypes = [wt.HWND, ULONG_PTR]
+user32.KillTimer.restype = wt.BOOL
+user32.GetGUIThreadInfo.argtypes = [wt.DWORD, ctypes.POINTER(GUITHREADINFO)]
+user32.GetGUIThreadInfo.restype = wt.BOOL
+
 class RAWINPUT(ctypes.Structure):
     _fields_ = [("header", RAWINPUTHEADER), ("keyboard", RAWKEYBOARD)]
 
@@ -220,10 +244,11 @@ class WNDCLASSEXW(ctypes.Structure):
 # --- Globals ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 config = {}
+config_ready = False
 commands = {}
 api_keys = []
 model = ""
-prefix = "?"
+prefix = "."
 processing = False
 abort_event = threading.Event()  # Set when user types during processing — aborts spinner
 last_original_text = None
@@ -237,6 +262,8 @@ provider = "gemini"  # groq, gemini, custom
 temperature = 0.5
 custom_endpoint = ""
 key_delay = 0.20  # Seconds between dependent keystroke operations (Ctrl+A → Ctrl+V, etc.)
+trigger_delay = 1.0  # Seconds to wait after typing a trigger before firing (0 = immediate)
+pending_trigger = None  # (name, fg_hwnd, focus_hwnd, buffer_text) or None
 
 # Key management (round-robin with rate-limit tracking)
 _key_robin_index = 0
@@ -255,6 +282,226 @@ def wrap_user_text(text):
     """Wrap user text in <input>...</input> fencing for prompt injection resistance.
     Identical to Android's ApiClientUtils.wrapUserText."""
     return f"<input>\n{text}\n</input>"
+
+def find_trigger(text, prefix, names, buffer_truncated=False):
+    """Gibt den passenden Befehlsnamen zurück oder None.
+    text: Inhalt des Tastaturpuffers. names: iterierbare Befehlsnamen (inkl. System-Befehle).
+    Längster Treffer gewinnt. translate:XX (2 bis 5 ASCII alnum) wie bisher, Code klein geschrieben."""
+    if not text or not prefix:
+        return None
+    best_trigger = None
+    best_len = 0
+
+    def _boundary_ok(start_idx):
+        if start_idx == 0:
+            return not buffer_truncated
+        return text[start_idx - 1].isspace()
+
+    for name in names:
+        if not name:
+            continue
+        full = prefix + name
+        if text.endswith(full) and len(full) > best_len:
+            start_idx = len(text) - len(full)
+            if _boundary_ok(start_idx):
+                best_trigger = name
+                best_len = len(full)
+
+    t_prefix = prefix + "translate:"
+    t_idx = text.rfind(t_prefix)
+    if t_idx >= 0:
+        after = text[t_idx + len(t_prefix):]
+        if 2 <= len(after) <= 5 and all(c.isascii() and c.isalnum() for c in after):
+            full_trigger = "translate:" + after.lower()
+            full_len = len(prefix + full_trigger)
+            if full_len > best_len and _boundary_ok(t_idx):
+                best_trigger = full_trigger
+                best_len = full_len
+
+    return best_trigger
+
+def trigger_context_ok(full_text, trigger_full):
+    """True, wenn full_text.rstrip('\\r\\n') case-insensitiv mit trigger_full endet
+    und das Zeichen davor Whitespace ist oder der Text dort beginnt."""
+    if not full_text or not trigger_full:
+        return False
+    stripped = full_text.rstrip("\r\n")
+    if not stripped.lower().endswith(trigger_full.lower()):
+        return False
+    start_idx = len(stripped) - len(trigger_full)
+    if start_idx == 0:
+        return True
+    return stripped[start_idx - 1].isspace()
+
+def parse_trigger_delay(value) -> int:
+    """Parse trigger_delay_ms from config, returning an int clamped to 0..5000 (default 1000)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 1000
+    try:
+        fval = float(value)
+    except (OverflowError, ValueError, TypeError):
+        return 1000
+    if not math.isfinite(fval):
+        return 1000
+    return max(0, min(5000, int(fval)))
+
+def write_json_atomic(path, data):
+    """Write JSON data atomically to `path` via a temp file in the same directory."""
+    target = os.path.abspath(path)
+    parent = os.path.dirname(target) or "."
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=parent, delete=False, suffix=".tmp"
+        ) as f:
+            tmp_path = f.name
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target)
+        tmp_path = None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+def validate_settings(values) -> list[str]:
+    """Validate general settings dict and return a list of German error messages (empty = OK)."""
+    errors = []
+    prov = values.get("provider", "")
+    if prov not in ("custom", "gemini", "groq"):
+        errors.append("Ungültiger Anbieter.")
+
+    if prov == "custom":
+        ep = values.get("endpoint", "")
+        if not isinstance(ep, str) or not ep.strip().startswith(("http://", "https://")):
+            errors.append("Endpoint muss mit http:// oder https:// beginnen.")
+        else:
+            parsed = urllib.parse.urlparse(ep.strip())
+            if not parsed.netloc:
+                errors.append("Endpoint muss eine gültige Adresse enthalten.")
+
+    mdl = values.get("model", "")
+    if not isinstance(mdl, str) or not mdl.strip():
+        errors.append("Modell darf nicht leer sein.")
+
+    temp = values.get("temperature")
+    temp_ok = False
+    if not isinstance(temp, bool):
+        try:
+            tval = float(temp)
+            if math.isfinite(tval) and 0.0 <= tval <= 2.0:
+                temp_ok = True
+        except (TypeError, ValueError, OverflowError):
+            pass
+    if not temp_ok:
+        errors.append("Temperatur muss zwischen 0.0 und 2.0 liegen.")
+
+    pref = values.get("prefix", "")
+    if (not isinstance(pref, str) or not (1 <= len(pref) <= 3)
+            or any(c.isspace() or c.isalnum() for c in pref)):
+        errors.append("Präfix muss 1 bis 3 Zeichen lang sein (ohne Leerzeichen, Buchstaben oder Ziffern).")
+
+    delay = values.get("trigger_delay_ms")
+    delay_ok = False
+    if not isinstance(delay, bool):
+        try:
+            dval = float(delay)
+            if math.isfinite(dval) and float(int(dval)) == dval and 0 <= int(dval) <= 5000:
+                delay_ok = True
+        except (TypeError, ValueError, OverflowError):
+            pass
+    if not delay_ok:
+        errors.append("Tipp-Pause muss eine ganze Zahl zwischen 0 und 5000 ms sein.")
+
+    return errors
+
+def validate_commands(entries, prefix=".") -> list[str]:
+    """Validate command list entries and return German error messages (empty = valid)."""
+    if not isinstance(entries, list):
+        return ["Befehlsliste ist ungültig."]
+    errors = []
+    if len(entries) > 100:
+        errors.append("Höchstens 100 Befehle erlaubt.")
+
+    system_names = {"undo", "copy", "cut", "paste", "replace"}
+    valid_types = {"ai", "replacer-text", "replacer-shell"}
+    seen = set()
+
+    for idx, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            errors.append(f"Eintrag {idx}: ungültiges Format.")
+            continue
+        trigger = entry.get("trigger", "")
+        if not isinstance(trigger, str) or not trigger:
+            errors.append(f"Eintrag {idx}: Name darf nicht leer sein.")
+            continue
+        if len(trigger) > 50:
+            errors.append(f"Befehl '{trigger}': Name darf höchstens 50 Zeichen lang sein.")
+        if any(c.isspace() for c in trigger):
+            errors.append(f"Befehl '{trigger}': Name darf keine Leerzeichen enthalten.")
+        if prefix and trigger.startswith(prefix):
+            errors.append(f"Befehl '{trigger}': Name darf nicht mit dem Präfix '{prefix}' beginnen.")
+        lower = trigger.lower()
+        if lower in seen:
+            errors.append(f"Befehl '{trigger}': Name ist doppelt vergeben.")
+        seen.add(lower)
+        if lower in system_names:
+            errors.append(f"Befehl '{trigger}': '{trigger}' ist ein eingebauter Systembefehl.")
+        if lower == "translate" or lower.startswith("translate:"):
+            errors.append(f"Befehl '{trigger}': 'translate' ist reserviert.")
+
+        cmd_type = entry.get("type", "")
+        if cmd_type not in valid_types:
+            errors.append(f"Befehl '{trigger}': ungültiger Typ '{cmd_type}'.")
+        elif cmd_type == "ai":
+            prompt_val = entry.get("prompt", "")
+            if not isinstance(prompt_val, str) or not prompt_val.strip():
+                errors.append(f"Befehl '{trigger}': Prompt darf nicht leer sein.")
+        else:
+            val = entry.get("value", "")
+            if not isinstance(val, str) or not val.strip():
+                errors.append(f"Befehl '{trigger}': Wert darf nicht leer sein.")
+
+    return errors
+
+def find_command_prefix_warnings(entries, prefix=".") -> list[str]:
+    """Return German warning strings when one command name is a prefix of another."""
+    names = sorted(
+        {e.get("trigger", "") for e in entries if isinstance(e, dict) and isinstance(e.get("trigger"), str) and e.get("trigger")},
+        key=len,
+    )
+    warnings = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            if b.startswith(a):
+                warnings.append(f"{prefix}{a} ist Anfang von {prefix}{b}. Mit Tipp Pause 0 feuert immer der kürzere.")
+    return warnings
+
+def config_problem(config_dict):
+    """Return a German problem description if config_dict is incomplete/invalid, or None if ready."""
+    if not isinstance(config_dict, dict):
+        return "config.json ist ungültig."
+    prov = config_dict.get("provider", "custom")
+    if prov not in ("custom", "gemini", "groq"):
+        return "Ungültiger Anbieter."
+    if prov == "custom":
+        ep = config_dict.get("endpoint", "")
+        if not isinstance(ep, str) or not ep.strip():
+            return "Endpoint fehlt."
+        if not ep.strip().startswith(("http://", "https://")):
+            return "Endpoint muss mit http:// oder https:// beginnen."
+    mdl = config_dict.get("model", "")
+    if not isinstance(mdl, str) or not mdl.strip():
+        return "Modell fehlt."
+    keys = config_dict.get("api_keys", [])
+    valid_keys = [k for k in keys if isinstance(k, str) and k.strip()] if isinstance(keys, list) else []
+    if prov in ("gemini", "groq") and not valid_keys:
+        return "API Key fehlt."
+    return None
 
 def strip_markdown_fences(text):
     """Strip markdown code fences from API response if present.
@@ -579,16 +826,31 @@ def _notify_debounced(message, icon=NIIF_INFO):
 
 # --- Load config ---
 def load_config():
-    global config, commands, api_keys, model, prefix, translate_prefix
+    global config, config_ready, commands, api_keys, model, prefix, translate_prefix
     global trigger_strings, trigger_last_chars, max_buffer_len, keystroke_buffer
-    global provider, temperature, custom_endpoint, key_delay, spinner_mode
+    global provider, temperature, custom_endpoint, key_delay, trigger_delay, spinner_mode
 
     config_path = os.path.join(script_dir, "config.json")
 
-    # Check config file exists
+    # Create default config.json on first run if missing
     if not os.path.exists(config_path):
-        log("ERROR: config.json not found")
-        notify("SwiftSlate", "config.json not found. Create it in .swiftslate folder.", NIIF_ERROR)
+        default_cfg = {
+            "api_keys": [],
+            "provider": "custom",
+            "endpoint": "",
+            "model": "",
+            "temperature": 0.3,
+            "prefix": ".",
+            "trigger_delay_ms": 1000,
+            "key_delay": 200,
+            "spinner": "animated",
+        }
+        try:
+            write_json_atomic(config_path, default_cfg)
+            log("Created initial config.json")
+        except Exception as e:
+            log(f"ERROR: Cannot create config.json: {e}")
+        config_ready = False
         return False
 
     # Parse config JSON
@@ -597,71 +859,45 @@ def load_config():
             config = json.load(f)
     except (json.JSONDecodeError, ValueError) as e:
         log(f"ERROR: config.json parse error: {e}")
-        notify("SwiftSlate", f"config.json parse error: {e}", NIIF_ERROR)
+        if hwnd_main:
+            notify("SwiftSlate", f"config.json parse error: {e}", NIIF_ERROR)
+        config_ready = False
         return False
     except OSError as e:
         log(f"ERROR: Cannot read config.json: {e}")
-        notify("SwiftSlate", f"Cannot read config.json: {e}", NIIF_ERROR)
+        if hwnd_main:
+            notify("SwiftSlate", f"Cannot read config.json: {e}", NIIF_ERROR)
+        config_ready = False
         return False
 
-    # Validate the keys BEFORE publishing anything into the globals. This was the only
-    # failure path that returned late, and it ran after api_keys/provider/model/prefix/
-    # temperature/endpoint/key_delay/spinner had already been assigned — so saving a config
-    # with broken api_keys left the app running with api_keys == [] while the watcher logged
-    # "kept previous state", and every later transform then failed for a wrong stated reason.
-    if not isinstance(config, dict):
-        # A valid JSON document that isn't an object ([...], "str", 42, null) would otherwise
-        # raise AttributeError on the .get() below — caught by neither except clause above, so
-        # the process died silently under pythonw at startup.
-        log("ERROR: config.json must contain a JSON object")
-        notify("SwiftSlate", "config.json must contain a JSON object.", NIIF_ERROR)
+    prob = config_problem(config)
+    if prob:
+        log(f"Config not ready: {prob}")
+        config_ready = False
         return False
 
     parsed_keys = config.get("api_keys", [])
     if not isinstance(parsed_keys, list):
-        # A string here would be iterated character-by-character downstream
-        log("ERROR: api_keys in config.json must be a list")
         parsed_keys = []
     parsed_keys = [k for k in parsed_keys if isinstance(k, str) and k.strip()]
-    if not parsed_keys:
-        log("ERROR: No valid API keys in config.json")
-        notify("SwiftSlate", "No valid API keys in config.json.", NIIF_ERROR)
-        if debug_mode:
-            print("  Error: No API keys configured. Edit config.json.")
-        return False
 
     api_keys = parsed_keys
     provider = config.get("provider", "gemini")
-    # Membership must be checked BEFORE default_model is derived from it: a typo'd or
-    # differently-cased provider ("Gemini", "gemeni") otherwise falls through to the
-    # Groq default model while provider is later coerced to gemini, so every request
-    # sends a Groq model id to Gemini and fails.
-    if provider not in ("groq", "gemini", "custom"):
-        log(f"WARNING: Unknown provider '{provider}', defaulting to gemini")
-        provider = "gemini"
     default_model = DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_GROQ_MODEL
     model = config.get("model", default_model)
-    if not isinstance(model, str) or not model.strip():
-        log(f"WARNING: Invalid model value, defaulting to {default_model}")
-        model = default_model
-    prefix = config.get("prefix", "?")
+    prefix = config.get("prefix", ".")
     temperature = config.get("temperature", 0.5)
     custom_endpoint = config.get("endpoint", "")
     if not isinstance(custom_endpoint, str):
-        # A non-string endpoint would crash .startswith() validation below
-        log("WARNING: Invalid endpoint value, ignoring")
         custom_endpoint = ""
 
     # Validate prefix (must happen before translate_prefix is computed)
-    if not isinstance(prefix, str) or not prefix:
-        log("WARNING: Invalid prefix, defaulting to '?'")
-        prefix = "?"
+    if (not isinstance(prefix, str) or not (1 <= len(prefix) <= 3)
+            or any(c.isspace() or c.isalnum() for c in prefix)):
+        log("WARNING: Invalid prefix, defaulting to '.'")
+        prefix = "."
     translate_prefix = prefix + "translate:"
 
-    # Validate temperature. json.load accepts Infinity/NaN and huge int literals, and
-    # float(10**400)/int(inf)/int(nan) raise — an exception here would abort load_config
-    # halfway, leaving some globals published and others stale (e.g. a new prefix live while
-    # trigger_strings still holds the old one), with no notification.
     if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) \
             or not _finite(temperature):
         temperature = 0.5
@@ -675,21 +911,14 @@ def load_config():
     key_delay_ms = max(30, min(500, int(key_delay_ms)))  # Clamp 30-500ms
     key_delay = key_delay_ms / 1000.0  # Convert to seconds for time.sleep()
 
+    trigger_delay_ms = parse_trigger_delay(config.get("trigger_delay_ms", 1000))
+    trigger_delay = trigger_delay_ms / 1000.0
+
     # Validate spinner mode (animated | static | off)
     spinner_mode = config.get("spinner", "animated")
     if spinner_mode not in ("animated", "static", "off"):
         log(f"WARNING: Invalid spinner mode '{spinner_mode}', defaulting to animated")
         spinner_mode = "animated"
-
-    if provider == "custom" and not custom_endpoint:
-        log("WARNING: Custom provider but no endpoint set, defaulting to gemini")
-        notify("SwiftSlate", "Custom provider has no endpoint configured - falling back to Gemini.", NIIF_WARNING)
-        provider = "gemini"
-
-    if provider == "custom" and custom_endpoint and not custom_endpoint.startswith(("http://", "https://")):
-        log("WARNING: Custom endpoint must start with http:// or https://")
-        notify("SwiftSlate", "Custom endpoint URL is invalid - falling back to Gemini.", NIIF_ERROR)
-        provider = "gemini"
 
     if provider == "custom" and custom_endpoint.startswith("http://"):
         # Plaintext HTTP is normal for local LLMs; warn only for remote hosts
@@ -804,7 +1033,7 @@ def load_config():
         for b in names[i+1:]:
             if b.startswith(a):
                 shadowed.append((a, b))
-    if shadowed:
+    if shadowed and trigger_delay == 0:
         a, b = shadowed[0]
         extra = f" (+{len(shadowed)-1} more)" if len(shadowed) > 1 else ""
         for a2, b2 in shadowed:
@@ -819,6 +1048,10 @@ def load_config():
 
     log(f"Config loaded: model={model}, prefix={prefix}, keys={len(api_keys)}, key_delay={key_delay_ms}ms")
     log(f"Commands loaded: {len(commands)}")
+    was_ready = config_ready
+    config_ready = True
+    if not was_ready and hwnd_main:
+        notify("SwiftSlate", "SwiftSlate ist bereit.", NIIF_INFO)
     return True
 
 # --- Hot reload: watch config files for changes ---
@@ -1068,29 +1301,33 @@ def call_api(text, prompt):
     failure_reason = None
 
     tried_keys = set()
+    keyless_custom = (provider == "custom" and not api_keys)
     for attempt in range(max_attempts):
-        key = get_next_key(tried_keys)
-        if not key:
-            # All keys exhausted
-            if not api_keys:
-                failure_reason = "No API keys configured. Add one to config.json."
-            elif sum(1 for k in api_keys if _is_key_invalid(k)) >= len(api_keys):
-                if len(tried_keys) > 1:
-                    failure_reason = f"All {len(tried_keys)} API keys were rejected by the provider. Check your keys in config.json."
-                elif tried_keys:
-                    last_tried = list(tried_keys)[-1]
-                    hint = f"••••{last_tried[-4:]}" if len(last_tried) >= 4 else "key"
-                    failure_reason = f"API key was rejected by the provider ({hint}). Check your key in config.json."
-                else:
-                    failure_reason = ("All API keys were rejected by the provider. Check your keys, and "
-                                      f"that '{model}' is available to them.")
-            elif any(time.time() <= _rate_limited_keys.get(k, 0) for k in api_keys):
-                failure_reason = "All API keys are rate limited. Wait a moment and try again."
-            elif not failure_reason:
-                failure_reason = "No API key was available for this request."
-            break
+        if keyless_custom:
+            key = None
+        else:
+            key = get_next_key(tried_keys)
+            if not key:
+                # All keys exhausted
+                if not api_keys:
+                    failure_reason = "No API keys configured. Add one to config.json."
+                elif sum(1 for k in api_keys if _is_key_invalid(k)) >= len(api_keys):
+                    if len(tried_keys) > 1:
+                        failure_reason = f"All {len(tried_keys)} API keys were rejected by the provider. Check your keys in config.json."
+                    elif tried_keys:
+                        last_tried = list(tried_keys)[-1]
+                        hint = f"••••{last_tried[-4:]}" if len(last_tried) >= 4 else "key"
+                        failure_reason = f"API key was rejected by the provider ({hint}). Check your key in config.json."
+                    else:
+                        failure_reason = ("All API keys were rejected by the provider. Check your keys, and "
+                                          f"that '{model}' is available to them.")
+                elif any(time.time() <= _rate_limited_keys.get(k, 0) for k in api_keys):
+                    failure_reason = "All API keys are rate limited. Wait a moment and try again."
+                elif not failure_reason:
+                    failure_reason = "No API key was available for this request."
+                break
 
-        tried_keys.add(key)
+            tried_keys.add(key)
         try:
             if provider == "gemini":
                 result = _call_gemini(text, system_content, key)
@@ -1342,11 +1579,14 @@ def _call_openai_compatible(text, system_content, key, endpoint):
 
     body = json.dumps(request_body).encode("utf-8")
 
-    req = urllib.request.Request(url, data=body, headers={
-        "Authorization": f"Bearer {key}",
+    headers = {
         "Content-Type": "application/json",
         "User-Agent": "SwiftSlate/1.0",
-    }, method="POST")
+    }
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 
     # Let exceptions propagate to call_api retry loop
     with _secure_opener.open(req, timeout=45) as resp:
@@ -1721,10 +1961,20 @@ def _retry_paste(text, max_retries=5):
     log("All retry paste attempts failed")
     return False
 
+def _deselect_and_restore_clipboard(hwnd, prev_clip, prev_extra):
+    if hwnd and user32.GetForegroundWindow() == hwnd:
+        inputs_deselect = (INPUT * 2)(
+            _make_key(VK_RIGHT),
+            _make_key(VK_RIGHT, KEYEVENTF_KEYUP),
+        )
+        user32.SendInput(2, ctypes.byref(inputs_deselect), ctypes.sizeof(INPUT))
+    if prev_clip is not None or prev_extra:
+        set_clipboard_silent(prev_clip or "", prev_extra)
+
 # --- Transform (AI command) ---
 def do_transform(trigger_name, prompt):
     global processing, last_original_text
-    log(f"--- Transform: ?{trigger_name} ---")
+    log(f"--- Transform: {prefix}{trigger_name} ---")
 
     hwnd = user32.GetForegroundWindow()
     trigger_full = prefix + trigger_name
@@ -1744,8 +1994,13 @@ def do_transform(trigger_name, prompt):
             _notify_debounced("Could not read the text in this field.", NIIF_WARNING)
             return
 
+        if not trigger_context_ok(full_text, trigger_full):
+            log("Trigger context rejected")
+            _deselect_and_restore_clipboard(hwnd, prev_clip, prev_extra)
+            return
+
         # Strip trigger (case-insensitive for translate:XX)
-        input_text = full_text
+        input_text = full_text.rstrip("\r\n")
         if input_text.lower().endswith(trigger_full.lower()):
             input_text = input_text[:-len(trigger_full)].rstrip()
 
@@ -2039,7 +2294,8 @@ def do_undo():
 # --- Clipboard commands ---
 def do_clipboard_command(command):
     global processing, internal_clipboard, last_original_text
-    log(f"--- Clipboard: ?{command} ---")
+    log(f"--- Clipboard: {prefix}{command} ---")
+    hwnd = user32.GetForegroundWindow()
 
     try:
         trigger_full = prefix + command
@@ -2054,16 +2310,11 @@ def do_clipboard_command(command):
                 set_clipboard_silent(prev_clip or "", prev_extra)
             return
 
-        # The trigger must be the last thing in the field. grab_field_text() selects all, so
-        # full_text is the WHOLE field; without this guard ?cut replaced the entire field with
-        # "" (and still toasted success) when the trigger sat mid-text.
-        if not full_text.endswith(trigger_full):
-            log("Clipboard command: trigger not at end of field, leaving text unchanged")
-            _notify_debounced(f"{prefix}{command} only works at the end of the text.", NIIF_WARNING)
-            if prev_clip is not None or prev_extra:
-                set_clipboard_silent(prev_clip or "", prev_extra)
+        if not trigger_context_ok(full_text, trigger_full):
+            log("Trigger context rejected")
+            _deselect_and_restore_clipboard(hwnd, prev_clip, prev_extra)
             return
-        text_before = full_text[:-len(trigger_full)].rstrip()
+        text_before = full_text.rstrip("\r\n")[:-len(trigger_full)].rstrip()
 
         # The paste below replaces the field. If the user started typing after the grab,
         # pasting would destroy their keystrokes — abort like do_transform does.
@@ -2139,7 +2390,8 @@ def do_clipboard_command(command):
 # --- Replacer commands ---
 def do_replacer(trigger_name, cmd_type, value):
     global processing, last_original_text
-    log(f"--- Replacer ({cmd_type}): ?{trigger_name} ---")
+    log(f"--- Replacer ({cmd_type}): {prefix}{trigger_name} ---")
+    hwnd = user32.GetForegroundWindow()
 
     try:
         trigger_full = prefix + trigger_name
@@ -2154,20 +2406,12 @@ def do_replacer(trigger_name, cmd_type, value):
                 set_clipboard_silent(prev_clip or "", prev_extra)
             return
 
-        # The trigger must be at the end of the captured text. grab_field_text() does a
-        # select-all, so full_text is the WHOLE field — without this guard a trigger that
-        # isn't the last thing in a multi-line field left `before` empty and the paste
-        # below replaced the entire field with just the replacement.
-        # grab_field_text() leaves the field itself untouched, so the safe action is to
-        # do nothing but put the user's clipboard back.
-        if not full_text.endswith(trigger_full):
-            log("Replacer: trigger not at end of field, leaving text unchanged")
-            _notify_debounced(f"{prefix}{trigger_name} only works at the end of the text.", NIIF_WARNING)
-            if prev_clip is not None or prev_extra:
-                set_clipboard_silent(prev_clip or "", prev_extra)
+        if not trigger_context_ok(full_text, trigger_full):
+            log("Trigger context rejected")
+            _deselect_and_restore_clipboard(hwnd, prev_clip, prev_extra)
             return
 
-        before = full_text[:-len(trigger_full)]
+        before = full_text.rstrip("\r\n")[:-len(trigger_full)]
 
         # Record the undo point so ?undo restores this exact text after the replacement.
         last_original_text = before.rstrip()
@@ -2260,13 +2504,16 @@ def do_replacer(trigger_name, cmd_type, value):
 # --- Trigger handler ---
 def handle_trigger(trigger_name):
     global processing
+    if not config_ready:
+        log("Trigger ignored: config not ready")
+        return
     # Clear the abort signal BEFORE processing starts. Previously it was
     # cleared inside do_transform after the worker thread spun up, so a user
     # keystroke landing in that window set the event and was then wiped,
     # losing a legitimate abort.
     abort_event.clear()
     processing = True
-    log(f"Trigger: ?{trigger_name}")
+    log(f"Trigger: {prefix}{trigger_name}")
 
     try:
         if trigger_name == "undo":
@@ -2298,8 +2545,26 @@ def process_keystroke(vkey, scan_code):
         log(f"ERROR in process_keystroke: {e}")
         keystroke_buffer.clear()
 
+def _get_focus_hwnd(fg_hwnd):
+    if not fg_hwnd:
+        return None
+    tid = user32.GetWindowThreadProcessId(fg_hwnd, None)
+    if not tid:
+        return None
+    gti = GUITHREADINFO()
+    gti.cbSize = ctypes.sizeof(GUITHREADINFO)
+    if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
+        return gti.hwndFocus
+    return None
+
 def _process_keystroke_inner(vkey, scan_code):
-    global last_fg_hwnd, last_keystroke_time, last_typed_vkey, last_typed_vkey_time
+    global last_fg_hwnd, last_keystroke_time, last_typed_vkey, last_typed_vkey_time, pending_trigger
+
+    if pending_trigger is not None:
+        if hwnd_main:
+            user32.KillTimer(hwnd_main, TRIGGER_TIMER_ID)
+        pending_trigger = None
+        log("Pending trigger cancelled (typing)")
 
     # Clear buffer on window change (prevents cross-app trigger firing)
     current_fg = user32.GetForegroundWindow()
@@ -2402,35 +2667,564 @@ def _process_keystroke_inner(vkey, scan_code):
 
     # Check triggers
     text = "".join(keystroke_buffer)
-    best_trigger = None
-    best_len = 0
-
-    for name, full in trigger_strings.items():
-        if text.endswith(full) and len(full) > best_len:
-            best_trigger = name
-            best_len = len(full)
-
-    # Check translate:XX pattern — 2-5 char alphanumeric language code, matching Android's
-    # rule (open-ended to support ISO 639 variants like "pt-BR" without a hyphen, without
-    # maintaining a hardcoded list; the AI model handles invalid codes gracefully).
-    t_idx = text.rfind(translate_prefix)
-    if t_idx >= 0:
-        after = text[t_idx + len(translate_prefix):]
-        if 2 <= len(after) <= 5 and all(c.isascii() and c.isalnum() for c in after):
-            full_trigger = "translate:" + after.lower()
-            full_len = len(prefix + full_trigger)
-            if full_len > best_len:
-                best_trigger = full_trigger
-                best_len = full_len
+    buffer_truncated = (keystroke_buffer.maxlen is not None and len(keystroke_buffer) == keystroke_buffer.maxlen)
+    best_trigger = find_trigger(text, prefix, trigger_strings.keys(), buffer_truncated=buffer_truncated)
 
     if best_trigger and not processing:
-        keystroke_buffer.clear()
-        last_typed_vkey = vkey
-        last_typed_vkey_time = time.time()
-        handle_trigger(best_trigger)
+        if trigger_delay > 0 and hwnd_main:
+            delay_ms = int(round(trigger_delay * 1000))
+            focus_hwnd = _get_focus_hwnd(current_fg)
+            pending_trigger = (best_trigger, current_fg, focus_hwnd, text)
+            last_typed_vkey = vkey
+            last_typed_vkey_time = time.time()
+            user32.SetTimer(hwnd_main, TRIGGER_TIMER_ID, delay_ms, None)
+            log(f"Pending trigger: {prefix}{best_trigger} ({delay_ms} ms)")
+        else:
+            keystroke_buffer.clear()
+            last_typed_vkey = vkey
+            last_typed_vkey_time = time.time()
+            handle_trigger(best_trigger)
+
+_settings_proc = None
+
+def _open_settings_window():
+    """Launch the tkinter settings window in a separate process (if not already open)."""
+    global _settings_proc
+    if _settings_proc is not None and _settings_proc.poll() is None:
+        return
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        _settings_proc = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--settings"],
+            cwd=script_dir,
+            creationflags=flags,
+        )
+    except Exception as e:
+        log(f"Failed to open settings window: {e}")
+
+def _get_startup_shortcut_path():
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        return ""
+    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "SwiftSlate.lnk")
+
+def _set_autostart(enabled):
+    lnk_path = _get_startup_shortcut_path()
+    if not lnk_path:
+        raise RuntimeError("APPDATA-Pfad nicht gefunden.")
+    if not enabled:
+        if os.path.exists(lnk_path):
+            os.unlink(lnk_path)
+        return
+    os.makedirs(os.path.dirname(lnk_path), exist_ok=True)
+    py_dir = os.path.dirname(os.path.abspath(sys.executable))
+    pythonw = os.path.join(py_dir, "pythonw.exe")
+    target = pythonw if os.path.isfile(pythonw) else os.path.abspath(sys.executable)
+    script_path = os.path.abspath(__file__)
+    env = os.environ.copy()
+    env["SWIFTSLATE_LNK"] = lnk_path
+    env["SWIFTSLATE_TARGET"] = target
+    env["SWIFTSLATE_ARGS"] = f'"{script_path}"'
+    env["SWIFTSLATE_WORKDIR"] = script_dir
+    ps_cmd = (
+        '$ws = New-Object -ComObject WScript.Shell; '
+        '$s = $ws.CreateShortcut($env:SWIFTSLATE_LNK); '
+        '$s.TargetPath = $env:SWIFTSLATE_TARGET; '
+        '$s.Arguments = $env:SWIFTSLATE_ARGS; '
+        '$s.WorkingDirectory = $env:SWIFTSLATE_WORKDIR; '
+        '$s.Save()'
+    )
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_cmd],
+        check=True,
+        env=env,
+        creationflags=flags,
+    )
+
+def run_settings_window():
+    """Run the standalone tkinter settings window (--settings)."""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox, ttk
+    except ImportError:
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "Für das Einstellungsfenster fehlt tkinter. Bitte Python von python.org mit Tcl/Tk installieren.",
+            "SwiftSlate",
+            0x10,
+        )
+        return
+
+    config_path = os.path.join(script_dir, "config.json")
+
+    def _read_config_file():
+        if os.path.isfile(config_path):
+            try:
+                with open(config_path, encoding="utf-8-sig") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    return loaded
+            except Exception:
+                pass
+        return {}
+
+    raw_cfg = _read_config_file()
+    stored_keys = list(raw_cfg.get("api_keys") or []) if isinstance(raw_cfg.get("api_keys"), list) else []
+
+    root = tk.Tk()
+    root.title("SwiftSlate – Einstellungen")
+    root.resizable(True, False)
+    try:
+        root.iconbitmap(os.path.join(script_dir, "assets", "icon.ico"))
+    except Exception:
+        pass
+
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+
+    general_frame = ttk.Frame(notebook, padding=12)
+    notebook.add(general_frame, text="Allgemein")
+    general_frame.columnconfigure(1, weight=1)
+
+    provider_labels = [
+        ("OpenAI kompatible Schnittstelle", "custom"),
+        ("Google Gemini", "gemini"),
+        ("Groq", "groq"),
+    ]
+    label_to_prov = dict(provider_labels)
+    prov_to_label = {v: k for k, v in provider_labels}
+
+    init_prov = raw_cfg.get("provider", "custom")
+    if init_prov not in prov_to_label:
+        init_prov = "custom"
+    init_endpoint = raw_cfg.get("endpoint", "") if isinstance(raw_cfg.get("endpoint"), str) else ""
+    init_model = raw_cfg.get("model", "") if isinstance(raw_cfg.get("model"), str) else ""
+    init_temp = str(raw_cfg.get("temperature", 0.3))
+    init_prefix = raw_cfg.get("prefix", ".") if isinstance(raw_cfg.get("prefix"), str) else "."
+    init_delay = str(parse_trigger_delay(raw_cfg.get("trigger_delay_ms", 1000)))
+    lnk_path = _get_startup_shortcut_path()
+    init_autostart = bool(lnk_path and os.path.exists(lnk_path))
+
+    prov_var = tk.StringVar(value=prov_to_label[init_prov])
+    endpoint_var = tk.StringVar(value=init_endpoint)
+    model_var = tk.StringVar(value=init_model)
+    new_key_var = tk.StringVar(value="")
+    temp_var = tk.StringVar(value=init_temp)
+    prefix_var = tk.StringVar(value=init_prefix)
+    delay_var = tk.StringVar(value=init_delay)
+    autostart_var = tk.BooleanVar(value=init_autostart)
+
+    row = 0
+    ttk.Label(general_frame, text="Anbieter:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    prov_combo = ttk.Combobox(
+        general_frame,
+        textvariable=prov_var,
+        values=[lbl for lbl, _ in provider_labels],
+        state="readonly",
+    )
+    prov_combo.grid(row=row, column=1, sticky="ew", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="Endpoint:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    endpoint_entry = ttk.Entry(general_frame, textvariable=endpoint_var, width=42)
+    endpoint_entry.grid(row=row, column=1, sticky="ew", pady=4)
+
+    row += 1
+    endpoint_warn_var = tk.StringVar(value="")
+    endpoint_warn_lbl = ttk.Label(general_frame, textvariable=endpoint_warn_var, foreground="#b45309")
+    endpoint_warn_lbl.grid(row=row, column=1, sticky="w")
+
+    row += 1
+    ttk.Label(general_frame, text="Modell:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=model_var, width=42).grid(row=row, column=1, sticky="ew", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="API Key:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    key_status_frame = ttk.Frame(general_frame)
+    key_status_frame.grid(row=row, column=1, sticky="ew", pady=4)
+    key_status_var = tk.StringVar()
+
+    def _refresh_key_status():
+        if stored_keys:
+            key_status_var.set(f"Gespeichert: {len(stored_keys)} Key(s)")
+        else:
+            key_status_var.set("Kein Key gespeichert")
+
+    _refresh_key_status()
+    ttk.Label(key_status_frame, textvariable=key_status_var).pack(side="left")
+
+    keys_cleared = [False]
+
+    def _clear_keys():
+        if not stored_keys:
+            return
+        if messagebox.askyesno("Keys entfernen", "Alle gespeicherten API Keys wirklich entfernen?", parent=root):
+            stored_keys.clear()
+            keys_cleared[0] = True
+            _refresh_key_status()
+
+    ttk.Button(key_status_frame, text="Keys entfernen", command=_clear_keys).pack(side="right")
+
+    row += 1
+    ttk.Label(general_frame, text="Neuer Key:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=new_key_var, show="\u2022", width=42).grid(row=row, column=1, sticky="ew", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="Temperatur (0.0 – 2.0):").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=temp_var, width=12).grid(row=row, column=1, sticky="w", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="Präfix:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=prefix_var, width=12).grid(row=row, column=1, sticky="w", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="Tipp-Pause (ms, 0–5000):").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=delay_var, width=12).grid(row=row, column=1, sticky="w", pady=4)
+
+    row += 1
+    ttk.Checkbutton(
+        general_frame,
+        text="Mit Windows starten (Autostart)",
+        variable=autostart_var,
+    ).grid(row=row, column=1, sticky="w", pady=6)
+
+    def _update_endpoint_state(*_args):
+        prov_code = label_to_prov.get(prov_var.get(), "custom")
+        if prov_code == "custom":
+            endpoint_entry.configure(state="normal")
+            ep = endpoint_var.get().strip().lower()
+            if ep.startswith("http://") and not ep.startswith(("http://localhost", "http://127.0.0.1")):
+                endpoint_warn_var.set("Hinweis: Unverschlüsselte http://-Verbindung (nur lokal empfohlen).")
+            else:
+                endpoint_warn_var.set("")
+        else:
+            endpoint_entry.configure(state="disabled")
+            endpoint_warn_var.set("")
+
+    prov_var.trace_add("write", _update_endpoint_state)
+    endpoint_var.trace_add("write", _update_endpoint_state)
+    _update_endpoint_state()
+
+    # --- Tab 2: Befehle ---
+    commands_path = os.path.join(script_dir, "commands.json")
+
+    def _read_commands_file():
+        if os.path.isfile(commands_path):
+            try:
+                with open(commands_path, encoding="utf-8-sig") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list):
+                    return [dict(item) for item in loaded if isinstance(item, dict)]
+            except Exception:
+                pass
+        return []
+
+    commands_data = _read_commands_file()
+    cmd_type_labels = [
+        ("KI", "ai"),
+        ("Text", "replacer-text"),
+        ("Shell", "replacer-shell"),
+    ]
+    label_to_cmd_type = dict(cmd_type_labels)
+    cmd_type_to_label = {v: k for k, v in cmd_type_labels}
+
+    commands_frame = ttk.Frame(notebook, padding=12)
+    notebook.add(commands_frame, text="Befehle")
+    commands_frame.columnconfigure(0, weight=1)
+    commands_frame.columnconfigure(1, weight=2)
+    commands_frame.rowconfigure(0, weight=1)
+
+    left_frame = ttk.Frame(commands_frame)
+    left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+    left_frame.rowconfigure(0, weight=1)
+    left_frame.columnconfigure(0, weight=1)
+
+    tree = ttk.Treeview(left_frame, columns=("trigger", "type"), show="headings", selectmode="browse", height=12)
+    tree.heading("trigger", text="Befehl")
+    tree.heading("type", text="Typ")
+    tree.column("trigger", width=150)
+    tree.column("type", width=70)
+    tree.grid(row=0, column=0, sticky="nsew")
+
+    tree_scroll = ttk.Scrollbar(left_frame, orient="vertical", command=tree.yview)
+    tree_scroll.grid(row=0, column=1, sticky="ns")
+    tree.configure(yscrollcommand=tree_scroll.set)
+
+    list_btn_frame = ttk.Frame(left_frame)
+    list_btn_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 4))
+
+    ttk.Label(
+        left_frame,
+        text="Eingebaut: undo, copy, cut, paste, replace, translate:XX",
+        foreground="#6b7280",
+    ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+    right_frame = ttk.Frame(commands_frame)
+    right_frame.grid(row=0, column=1, sticky="nsew")
+    right_frame.columnconfigure(1, weight=1)
+    right_frame.rowconfigure(2, weight=1)
+
+    cmd_name_var = tk.StringVar()
+    cmd_type_var = tk.StringVar(value="KI")
+    cmd_body_label_var = tk.StringVar(value="Prompt:")
+    cmd_shell_hint_var = tk.StringVar(value="")
+    cmd_warn_var = tk.StringVar(value="")
+
+    ttk.Label(right_frame, text="Name:").grid(row=0, column=0, sticky="w", pady=4, padx=(0, 8))
+    cmd_name_entry = ttk.Entry(right_frame, textvariable=cmd_name_var)
+    cmd_name_entry.grid(row=0, column=1, sticky="ew", pady=4)
+
+    ttk.Label(right_frame, text="Typ:").grid(row=1, column=0, sticky="w", pady=4, padx=(0, 8))
+    cmd_type_combo = ttk.Combobox(
+        right_frame,
+        textvariable=cmd_type_var,
+        values=[lbl for lbl, _ in cmd_type_labels],
+        state="readonly",
+    )
+    cmd_type_combo.grid(row=1, column=1, sticky="ew", pady=4)
+
+    ttk.Label(right_frame, textvariable=cmd_body_label_var).grid(row=2, column=0, sticky="nw", pady=4, padx=(0, 8))
+    cmd_body_text = tk.Text(right_frame, width=38, height=10, wrap="word")
+    cmd_body_text.grid(row=2, column=1, sticky="nsew", pady=4)
+
+    ttk.Label(right_frame, textvariable=cmd_shell_hint_var, foreground="#6b7280").grid(row=3, column=1, sticky="w")
+    ttk.Label(right_frame, textvariable=cmd_warn_var, foreground="#b45309", wraplength=280).grid(row=4, column=1, sticky="w", pady=(4, 0))
+
+    selected_idx = [None]
+    loading_editor = [False]
+
+    def _update_editor_labels(*_args):
+        ctype = label_to_cmd_type.get(cmd_type_var.get(), "ai")
+        if ctype == "ai":
+            cmd_body_label_var.set("Prompt:")
+            cmd_shell_hint_var.set("")
+        elif ctype == "replacer-shell":
+            cmd_body_label_var.set("Wert:")
+            cmd_shell_hint_var.set("Wird als Befehl in der Shell ausgeführt.")
+        else:
+            cmd_body_label_var.set("Wert:")
+            cmd_shell_hint_var.set("")
+
+    def _refresh_warnings():
+        warns = find_command_prefix_warnings(commands_data, prefix=prefix_var.get() or ".")
+        cmd_warn_var.set("\n".join(warns[:3]))
+
+    def _commit_editor_to_list():
+        idx = selected_idx[0]
+        if idx is None or not (0 <= idx < len(commands_data)):
+            return
+        entry = commands_data[idx]
+        entry["trigger"] = cmd_name_var.get().strip()
+        ctype = label_to_cmd_type.get(cmd_type_var.get(), "ai")
+        entry["type"] = ctype
+        body_val = cmd_body_text.get("1.0", "end-1c")
+        if ctype == "ai":
+            entry["prompt"] = body_val
+            entry.pop("value", None)
+        else:
+            entry["value"] = body_val
+            entry.pop("prompt", None)
+
+    def _refresh_tree(select_index=None):
+        cur_pref = prefix_var.get() or "."
+        tree.delete(*tree.get_children())
+        for i, entry in enumerate(commands_data):
+            trig = entry.get("trigger", "")
+            ctype = entry.get("type", "ai")
+            tree.insert("", "end", iid=str(i), values=(f"{cur_pref}{trig}", cmd_type_to_label.get(ctype, ctype)))
+        if select_index is not None and 0 <= select_index < len(commands_data):
+            tree.selection_set(str(select_index))
+            tree.focus(str(select_index))
+            _load_editor(select_index)
+        elif commands_data:
+            tree.selection_set("0")
+            tree.focus("0")
+            _load_editor(0)
+        else:
+            selected_idx[0] = None
+            loading_editor[0] = True
+            cmd_name_var.set("")
+            cmd_type_var.set("KI")
+            cmd_body_text.delete("1.0", "end")
+            loading_editor[0] = False
+        _refresh_warnings()
+
+    def _load_editor(idx):
+        loading_editor[0] = True
+        selected_idx[0] = idx
+        entry = commands_data[idx]
+        cmd_name_var.set(entry.get("trigger", ""))
+        ctype = entry.get("type", "ai")
+        cmd_type_var.set(cmd_type_to_label.get(ctype, "KI"))
+        cmd_body_text.delete("1.0", "end")
+        body_val = entry.get("prompt", "") if ctype == "ai" else entry.get("value", "")
+        cmd_body_text.insert("1.0", body_val or "")
+        _update_editor_labels()
+        loading_editor[0] = False
+
+    def _on_tree_select(_event):
+        sel = tree.selection()
+        if not sel:
+            return
+        new_idx = int(sel[0])
+        if selected_idx[0] == new_idx:
+            return
+        if selected_idx[0] is not None:
+            _commit_editor_to_list()
+            old_idx = selected_idx[0]
+            if 0 <= old_idx < len(commands_data):
+                cur_pref = prefix_var.get() or "."
+                e = commands_data[old_idx]
+                tree.item(str(old_idx), values=(f"{cur_pref}{e.get('trigger', '')}", cmd_type_to_label.get(e.get("type", "ai"), e.get("type", "ai"))))
+        _load_editor(new_idx)
+        _refresh_warnings()
+
+    tree.bind("<<TreeviewSelect>>", _on_tree_select)
+
+    def _on_editor_change(*_args):
+        if loading_editor[0]:
+            return
+        _update_editor_labels()
+        _commit_editor_to_list()
+        idx = selected_idx[0]
+        if idx is not None and 0 <= idx < len(commands_data):
+            cur_pref = prefix_var.get() or "."
+            e = commands_data[idx]
+            tree.item(str(idx), values=(f"{cur_pref}{e.get('trigger', '')}", cmd_type_to_label.get(e.get("type", "ai"), e.get("type", "ai"))))
+        _refresh_warnings()
+
+    cmd_name_var.trace_add("write", _on_editor_change)
+    cmd_type_var.trace_add("write", _on_editor_change)
+    cmd_body_text.bind("<KeyRelease>", _on_editor_change)
+    prefix_var.trace_add("write", lambda *_a: _refresh_tree(selected_idx[0]))
+
+    def _add_command():
+        _commit_editor_to_list()
+        commands_data.append({"trigger": "neu", "type": "ai", "prompt": ""})
+        _refresh_tree(len(commands_data) - 1)
+        cmd_name_entry.focus_set()
+
+    def _delete_command():
+        idx = selected_idx[0]
+        if idx is None or not (0 <= idx < len(commands_data)):
+            return
+        trig = commands_data[idx].get("trigger", "")
+        if not messagebox.askyesno("Befehl löschen", f"Befehl '{trig}' wirklich löschen?", parent=root):
+            return
+        commands_data.pop(idx)
+        next_idx = min(idx, len(commands_data) - 1) if commands_data else None
+        _refresh_tree(next_idx)
+
+    def _move_command(delta):
+        _commit_editor_to_list()
+        idx = selected_idx[0]
+        if idx is None:
+            return
+        new_idx = idx + delta
+        if not (0 <= new_idx < len(commands_data)):
+            return
+        commands_data[idx], commands_data[new_idx] = commands_data[new_idx], commands_data[idx]
+        _refresh_tree(new_idx)
+
+    ttk.Button(list_btn_frame, text="Neu", command=_add_command).pack(side="left", padx=(0, 4))
+    ttk.Button(list_btn_frame, text="Löschen", command=_delete_command).pack(side="left", padx=(0, 4))
+    ttk.Button(list_btn_frame, text="Nach oben", command=lambda: _move_command(-1)).pack(side="left", padx=(0, 4))
+    ttk.Button(list_btn_frame, text="Nach unten", command=lambda: _move_command(1)).pack(side="left")
+
+    _refresh_tree(0 if commands_data else None)
+
+    def _snapshot_all():
+        _commit_editor_to_list()
+        return (
+            prov_var.get(),
+            endpoint_var.get(),
+            model_var.get(),
+            new_key_var.get(),
+            temp_var.get(),
+            prefix_var.get(),
+            delay_var.get(),
+            autostart_var.get(),
+            keys_cleared[0],
+            json.dumps(commands_data, sort_keys=True, ensure_ascii=False),
+        )
+
+    saved_snapshot = [_snapshot_all()]
+
+    btn_frame = ttk.Frame(root, padding=(10, 4, 10, 10))
+    btn_frame.pack(fill="x")
+
+    def _save():
+        _commit_editor_to_list()
+        prov_code = label_to_prov.get(prov_var.get(), "custom")
+        values = {
+            "provider": prov_code,
+            "endpoint": endpoint_var.get().strip(),
+            "model": model_var.get().strip(),
+            "temperature": temp_var.get().strip(),
+            "prefix": prefix_var.get(),
+            "trigger_delay_ms": delay_var.get().strip(),
+        }
+        errs = validate_settings(values)
+        cmd_errs = validate_commands(commands_data, prefix=values["prefix"])
+        all_errs = errs + cmd_errs
+        if all_errs:
+            messagebox.showerror("Ungültige Eingaben", "\n".join(all_errs), parent=root)
+            return
+
+        cfg = _read_config_file()
+        cfg["provider"] = prov_code
+        if prov_code == "custom":
+            cfg["endpoint"] = values["endpoint"]
+        elif "endpoint" in cfg:
+            cfg["endpoint"] = cfg["endpoint"]
+        cfg["model"] = values["model"]
+        cfg["temperature"] = float(values["temperature"])
+        cfg["prefix"] = values["prefix"]
+        cfg["trigger_delay_ms"] = int(float(values["trigger_delay_ms"]))
+
+        raw_new_keys = new_key_var.get().strip()
+        if raw_new_keys:
+            parsed_keys = [k.strip() for k in re.split(r"[\n,]+", raw_new_keys) if k.strip()]
+            cfg["api_keys"] = parsed_keys
+            stored_keys[:] = parsed_keys
+        else:
+            cfg["api_keys"] = list(stored_keys)
+
+        try:
+            write_json_atomic(config_path, cfg)
+            write_json_atomic(commands_path, commands_data)
+        except Exception as e:
+            messagebox.showerror("Fehler beim Speichern", f"Dateien konnten nicht gespeichert werden:\n{e}", parent=root)
+            return
+
+        if autostart_var.get() != (bool(lnk_path and os.path.exists(lnk_path))):
+            try:
+                _set_autostart(autostart_var.get())
+            except Exception as e:
+                messagebox.showerror("Autostart-Fehler", f"Autostart konnte nicht geändert werden:\n{e}", parent=root)
+                return
+
+        new_key_var.set("")
+        keys_cleared[0] = False
+        _refresh_key_status()
+        saved_snapshot[0] = _snapshot_all()
+        messagebox.showinfo("Gespeichert", "Einstellungen und Befehle wurden gespeichert.", parent=root)
+
+    def _close():
+        if _snapshot_all() != saved_snapshot[0]:
+            if not messagebox.askyesno("Ungespeicherte Änderungen", "Änderungen verwerfen und schließen?", parent=root):
+                return
+        root.destroy()
+
+    ttk.Button(btn_frame, text="Schließen", command=_close).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Speichern", command=_save).pack(side="right")
+    root.protocol("WM_DELETE_WINDOW", _close)
+    root.mainloop()
 
 # --- Window procedure ---
 def wnd_proc(hwnd, msg, wparam, lparam):
+    global pending_trigger
 
     try:
         if msg == WM_INPUT:
@@ -2447,25 +3241,47 @@ def wnd_proc(hwnd, msg, wparam, lparam):
                         elif raw.keyboard.Message == WM_KEYDOWN or raw.keyboard.Message == WM_SYSKEYDOWN:
                             process_keystroke(raw.keyboard.VKey, raw.keyboard.MakeCode)
 
+        elif msg == WM_TIMER and wparam == TRIGGER_TIMER_ID:
+            if hwnd_main:
+                user32.KillTimer(hwnd_main, TRIGGER_TIMER_ID)
+            pt = pending_trigger
+            pending_trigger = None
+            if pt is not None and not processing:
+                name, fg_hwnd, focus_hwnd, buffer_text = pt
+                cur_fg = user32.GetForegroundWindow()
+                cur_focus = _get_focus_hwnd(cur_fg) if focus_hwnd is not None else None
+                if cur_fg != fg_hwnd:
+                    log("Pending trigger cancelled (foreground window changed)")
+                elif focus_hwnd is not None and cur_focus != focus_hwnd:
+                    log("Pending trigger cancelled (focus changed)")
+                elif "".join(keystroke_buffer) != buffer_text:
+                    log("Pending trigger cancelled (buffer changed)")
+                else:
+                    keystroke_buffer.clear()
+                    handle_trigger(name)
+
         elif msg == WM_TRAYICON:
             if lparam == WM_RBUTTONUP:
-                # Context menu with the app's only exit path. SetForegroundWindow is
+                # Context menu with Settings and Exit. SetForegroundWindow is
                 # required for the menu to dismiss when the user clicks elsewhere.
                 user32.SetForegroundWindow(hwnd)
                 hmenu = user32.CreatePopupMenu()
                 if hmenu:
-                    user32.AppendMenuW(hmenu, MF_STRING, MENU_ID_EXIT, "Exit SwiftSlate")
+                    user32.AppendMenuW(hmenu, MF_STRING, MENU_ID_SETTINGS, "Einstellungen\u2026")
+                    user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
+                    user32.AppendMenuW(hmenu, MF_STRING, MENU_ID_EXIT, "Beenden")
                     pt = wt.POINT()
                     user32.GetCursorPos(ctypes.byref(pt))
                     cmd = user32.TrackPopupMenu(hmenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                                 pt.x, pt.y, 0, hwnd, None)
                     user32.DestroyMenu(hmenu)
-                    if cmd == MENU_ID_EXIT:
+                    if cmd == MENU_ID_SETTINGS:
+                        _open_settings_window()
+                    elif cmd == MENU_ID_EXIT:
                         log("Exit requested from tray menu")
                         user32.DestroyWindow(hwnd)  # WM_DESTROY -> PostQuitMessage
             elif lparam == WM_LBUTTONDBLCLK:
-                log(f"Tray double-click (running: {provider}, {model})")
-                notify("SwiftSlate", f"Running — {provider} / {model}", NIIF_INFO)
+                _open_settings_window()
 
         elif msg == WM_DESTROY:
             user32.PostQuitMessage(0)
@@ -2497,6 +3313,10 @@ def acquire_singleton():
 def main():
     global hwnd_main, cf_exclude, cf_no_history, cf_no_cloud, log_file
 
+    if "--settings" in sys.argv:
+        run_settings_window()
+        return
+
     # Only write debug.log when --debug is passed
     if debug_mode:
         log_path = os.path.join(script_dir, "debug.log")
@@ -2512,8 +3332,7 @@ def main():
         ctypes.windll.user32.MessageBoxW(None, "Another SwiftSlate instance is already running.", "SwiftSlate", 0x30)
         return
 
-    if not load_config():
-        return
+    load_config()
     _start_file_watcher()
 
     # Register clipboard exclusion formats
@@ -2576,6 +3395,10 @@ def main():
 
     log("Raw Input registered")
     log(f"SwiftSlate Desktop running ({provider}, {model})")
+
+    if not config_ready:
+        notify("SwiftSlate", "SwiftSlate ist noch nicht eingerichtet. Einstellungen werden geöffnet.", NIIF_INFO)
+        _open_settings_window()
 
     if debug_mode:
         print("  SwiftSlate Desktop running")

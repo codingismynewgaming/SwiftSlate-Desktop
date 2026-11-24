@@ -25,5 +25,5 @@
 
 - [ ] Python syntax check passes (`python -c "import py_compile; py_compile.compile('SwiftSlate.pyw', doraise=True)"`)
 - [ ] No hardcoded API keys or secrets
-- [ ] Works with both system Python and embedded runtime
+- [ ] Works with system Python 3.10+ incl. tkinter
 - [ ] Follows existing code style
