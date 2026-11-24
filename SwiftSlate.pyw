@@ -1,7 +1,8 @@
 """
 SwiftSlate Desktop
 System-wide AI text transformation
-https://github.com/Musheer360/SwiftSlate-Desktop
+https://github.com/codingismynewgaming/SwiftSlate-Desktop
+Fork of https://github.com/Musheer360/SwiftSlate-Desktop
 """
 
 import collections
