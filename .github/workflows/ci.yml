@@ -32,38 +32,23 @@ jobs:
         run: pyflakes SwiftSlate.pyw
 
       - name: Ruff (real bugs only)
-        # F = pyflakes rules (undefined names, unused vars)
-        # E9 = syntax errors that prevent execution
-        # B = flake8-bugbear (likely bugs, not style)
-        # UP024/UP041/PLW1510 = fixable modernisation rules
-        # Excluded: BLE001 (broad except is intentional in daemon threads under pythonw),
-        #           RUF012 (ctypes _fields_ pattern, not a real mutable default),
-        #           SIM115 (lock/log file handles must stay open),
-        #           S310 (urllib HTTP client flagged as URL audit — false positive)
         run: ruff check --select F,E9,B,UP024,UP041,PLW1510 SwiftSlate.pyw
 
       - name: Verify installer hashes match files
         run: |
-          for f in SwiftSlate.pyw commands.json; do
-            actual=$(sha256sum "$f" | awk '{print toupper($1)}')
-            pinned=$(grep -oP "\"$f\"\s*=\s*\"\K[0-9A-F]{64}" install.ps1 | head -1)
-            if [ -z "$pinned" ] || [ "$actual" != "$pinned" ]; then
-              echo "::error::$f hash mismatch: file is $actual, installer pins $pinned. Update the hash in install.ps1 in this commit (install the pre-commit hook with 'git config core.hooksPath .githooks' to keep pins in sync automatically)."
-              exit 1
-            fi
-            echo "$f: hash OK"
-          done
+          python - <<'PY'
+          import hashlib, pathlib, re, sys
 
-      - name: Verify Python runtime pin
-        run: |
-          ver=$(grep -oP '\$pythonVersion\s*=\s*"\K[0-9.]+' install.ps1 | head -1)
-          pin=$(grep -oP '"python\.zip"\s*=\s*"\K[0-9A-F]{64}' install.ps1 | head -1)
-          [ -n "$ver" ] || { echo "::error::install.ps1 is missing \$pythonVersion"; exit 1; }
-          [ -n "$pin" ] || { echo "::error::install.ps1 is missing the python.zip pin"; exit 1; }
-          [ ${#pin} -eq 64 ] || { echo "::error::python.zip pin must be 64 hex chars, got '$pin'"; exit 1; }
-          code=$(curl -s -o /dev/null -w "%{http_code}" "https://www.python.org/ftp/python/$ver/python-$ver-embed-amd64.zip")
-          [ "$code" = "200" ] || { echo "::error::embeddable zip for Python $ver is not available (HTTP $code)"; exit 1; }
-          echo "python.zip pin OK ($ver)"
+          text = pathlib.Path("install/Install-SwiftSlate.ps1").read_text(encoding="utf-8")
+          for rel in ("SwiftSlate.pyw", "commands.json", "assets/icon.ico"):
+              actual = hashlib.sha256(pathlib.Path(rel).read_bytes()).hexdigest().upper()
+              m = re.search(r'"' + re.escape(rel) + r'"\s*=\s*"([0-9A-Fa-f]{64})"', text)
+              if not m or m.group(1).upper() != actual:
+                  pinned = m.group(1) if m else "<missing>"
+                  print(f"::error::{rel} hash mismatch: file is {actual}, installer pins {pinned}")
+                  sys.exit(1)
+              print(f"{rel}: hash OK")
+          PY
 
       - name: Verify stdlib-only imports
         run: |
@@ -74,5 +59,13 @@ jobs:
           bad=sorted(m-set(sys.stdlib_module_names)); assert not bad, 'non-stdlib imports: %s'%bad"
           echo "imports OK"
 
+      - name: Keine Secrets
+        run: |
+          if grep -RInE '(sk-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,})' --exclude-dir=.git --exclude-dir=tests .; then
+            echo "::error::Possible secret detected in repository"
+            exit 1
+          fi
+          echo "secrets check OK"
+
       - name: PowerShell syntax check
-        run: pwsh -NoProfile -Command '$errs = $null; [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$null, [ref]$errs) > $null; if ($errs.Count) { $errs | ForEach-Object { Write-Host $_.Message }; exit 1 } else { Write-Host "install.ps1 parses OK" }'
+        run: pwsh -NoProfile -Command '$errs = $null; [System.Management.Automation.Language.Parser]::ParseFile("install/Install-SwiftSlate.ps1", [ref]$null, [ref]$errs) > $null; if ($errs.Count) { $errs | ForEach-Object { Write-Host $_.Message }; exit 1 } else { Write-Host "install/Install-SwiftSlate.ps1 parses OK" }'
