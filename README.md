@@ -30,6 +30,24 @@ Type a trigger like **`?fix`** at the end of any text, in any app, and watch it 
 
 <br>
 
+## Dieser Fork
+
+Dieses Repository ist ein Fork von [Musheer360/SwiftSlate-Desktop](https://github.com/Musheer360/SwiftSlate-Desktop) (MIT-Lizenz, vielen Dank an Musheer360 für das Originalprojekt!).
+
+**Was in diesem Fork anders ist:**
+- Auslöser-Präfix `.` statt `?` mit konfigurierbarer Tipp-Pause (`trigger_delay_ms`, Standard 1000 ms) und sicherer Erkennung (keine Satzpunkte, URLs oder Dateinamen)
+- Eigenes Tray- und Fenster-Icon (`assets/icon.ico`), Tray-Icon direkt ab Programmstart
+- Grafisches Einstellungsfenster (`tkinter`) für Allgemein-Einstellungen und Befehls-Editor
+- Deutsche Standardbefehle in `commands.json`
+- Eigener generischer Installer unter `install/`
+
+**Beispiel für eine OpenAI-kompatible Schnittstelle (ohne Key im Repo):**
+- Endpoint: `https://chat-ai.academiccloud.de/v1` (GWDG SAIA, Beispiel)
+- Modell: z. B. `deepseek-v4.1-flash-1017`
+- Den eigenen API-Key ausschließlich lokal im Einstellungsfenster oder in der lokalen `config.json` eintragen.
+
+---
+
 ## 📋 Table of Contents
 
 - [Quick Demo](#-quick-demo)
