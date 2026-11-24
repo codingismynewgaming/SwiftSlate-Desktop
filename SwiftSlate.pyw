@@ -418,6 +418,68 @@ def validate_settings(values) -> list[str]:
 
     return errors
 
+def validate_commands(entries, prefix=".") -> list[str]:
+    """Validate command list entries and return German error messages (empty = valid)."""
+    if not isinstance(entries, list):
+        return ["Befehlsliste ist ungültig."]
+    errors = []
+    if len(entries) > 100:
+        errors.append("Höchstens 100 Befehle erlaubt.")
+
+    system_names = {"undo", "copy", "cut", "paste", "replace"}
+    valid_types = {"ai", "replacer-text", "replacer-shell"}
+    seen = set()
+
+    for idx, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            errors.append(f"Eintrag {idx}: ungültiges Format.")
+            continue
+        trigger = entry.get("trigger", "")
+        if not isinstance(trigger, str) or not trigger:
+            errors.append(f"Eintrag {idx}: Name darf nicht leer sein.")
+            continue
+        if len(trigger) > 50:
+            errors.append(f"Befehl '{trigger}': Name darf höchstens 50 Zeichen lang sein.")
+        if any(c.isspace() for c in trigger):
+            errors.append(f"Befehl '{trigger}': Name darf keine Leerzeichen enthalten.")
+        if prefix and trigger.startswith(prefix):
+            errors.append(f"Befehl '{trigger}': Name darf nicht mit dem Präfix '{prefix}' beginnen.")
+        lower = trigger.lower()
+        if lower in seen:
+            errors.append(f"Befehl '{trigger}': Name ist doppelt vergeben.")
+        seen.add(lower)
+        if lower in system_names:
+            errors.append(f"Befehl '{trigger}': '{trigger}' ist ein eingebauter Systembefehl.")
+        if lower == "translate" or lower.startswith("translate:"):
+            errors.append(f"Befehl '{trigger}': 'translate' ist reserviert.")
+
+        cmd_type = entry.get("type", "")
+        if cmd_type not in valid_types:
+            errors.append(f"Befehl '{trigger}': ungültiger Typ '{cmd_type}'.")
+        elif cmd_type == "ai":
+            prompt_val = entry.get("prompt", "")
+            if not isinstance(prompt_val, str) or not prompt_val.strip():
+                errors.append(f"Befehl '{trigger}': Prompt darf nicht leer sein.")
+        else:
+            val = entry.get("value", "")
+            if not isinstance(val, str) or not val.strip():
+                errors.append(f"Befehl '{trigger}': Wert darf nicht leer sein.")
+
+    return errors
+
+def find_command_prefix_warnings(entries, prefix=".") -> list[str]:
+    """Return German warning strings when one command name is a prefix of another."""
+    names = sorted(
+        {e.get("trigger", "") for e in entries if isinstance(e, dict) and isinstance(e.get("trigger"), str) and e.get("trigger")},
+        key=len,
+    )
+    warnings = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            if b.startswith(a):
+                warnings.append(f"{prefix}{a} ist Anfang von {prefix}{b}. Mit Tipp Pause 0 feuert immer der kürzere.")
+    return warnings
+
 def strip_markdown_fences(text):
     """Strip markdown code fences from API response if present.
     Identical to Android's ApiClientUtils.stripMarkdownFences."""
@@ -2829,7 +2891,236 @@ def run_settings_window():
     endpoint_var.trace_add("write", _update_endpoint_state)
     _update_endpoint_state()
 
-    def _snapshot_general():
+    # --- Tab 2: Befehle ---
+    commands_path = os.path.join(script_dir, "commands.json")
+
+    def _read_commands_file():
+        if os.path.isfile(commands_path):
+            try:
+                with open(commands_path, encoding="utf-8-sig") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list):
+                    return [dict(item) for item in loaded if isinstance(item, dict)]
+            except Exception:
+                pass
+        return []
+
+    commands_data = _read_commands_file()
+    cmd_type_labels = [
+        ("KI", "ai"),
+        ("Text", "replacer-text"),
+        ("Shell", "replacer-shell"),
+    ]
+    label_to_cmd_type = dict(cmd_type_labels)
+    cmd_type_to_label = {v: k for k, v in cmd_type_labels}
+
+    commands_frame = ttk.Frame(notebook, padding=12)
+    notebook.add(commands_frame, text="Befehle")
+    commands_frame.columnconfigure(0, weight=1)
+    commands_frame.columnconfigure(1, weight=2)
+    commands_frame.rowconfigure(0, weight=1)
+
+    left_frame = ttk.Frame(commands_frame)
+    left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+    left_frame.rowconfigure(0, weight=1)
+    left_frame.columnconfigure(0, weight=1)
+
+    tree = ttk.Treeview(left_frame, columns=("trigger", "type"), show="headings", selectmode="browse", height=12)
+    tree.heading("trigger", text="Befehl")
+    tree.heading("type", text="Typ")
+    tree.column("trigger", width=150)
+    tree.column("type", width=70)
+    tree.grid(row=0, column=0, sticky="nsew")
+
+    tree_scroll = ttk.Scrollbar(left_frame, orient="vertical", command=tree.yview)
+    tree_scroll.grid(row=0, column=1, sticky="ns")
+    tree.configure(yscrollcommand=tree_scroll.set)
+
+    list_btn_frame = ttk.Frame(left_frame)
+    list_btn_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 4))
+
+    ttk.Label(
+        left_frame,
+        text="Eingebaut: undo, copy, cut, paste, replace, translate:XX",
+        foreground="#6b7280",
+    ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+    right_frame = ttk.Frame(commands_frame)
+    right_frame.grid(row=0, column=1, sticky="nsew")
+    right_frame.columnconfigure(1, weight=1)
+    right_frame.rowconfigure(2, weight=1)
+
+    cmd_name_var = tk.StringVar()
+    cmd_type_var = tk.StringVar(value="KI")
+    cmd_body_label_var = tk.StringVar(value="Prompt:")
+    cmd_shell_hint_var = tk.StringVar(value="")
+    cmd_warn_var = tk.StringVar(value="")
+
+    ttk.Label(right_frame, text="Name:").grid(row=0, column=0, sticky="w", pady=4, padx=(0, 8))
+    cmd_name_entry = ttk.Entry(right_frame, textvariable=cmd_name_var)
+    cmd_name_entry.grid(row=0, column=1, sticky="ew", pady=4)
+
+    ttk.Label(right_frame, text="Typ:").grid(row=1, column=0, sticky="w", pady=4, padx=(0, 8))
+    cmd_type_combo = ttk.Combobox(
+        right_frame,
+        textvariable=cmd_type_var,
+        values=[lbl for lbl, _ in cmd_type_labels],
+        state="readonly",
+    )
+    cmd_type_combo.grid(row=1, column=1, sticky="ew", pady=4)
+
+    ttk.Label(right_frame, textvariable=cmd_body_label_var).grid(row=2, column=0, sticky="nw", pady=4, padx=(0, 8))
+    cmd_body_text = tk.Text(right_frame, width=38, height=10, wrap="word")
+    cmd_body_text.grid(row=2, column=1, sticky="nsew", pady=4)
+
+    ttk.Label(right_frame, textvariable=cmd_shell_hint_var, foreground="#6b7280").grid(row=3, column=1, sticky="w")
+    ttk.Label(right_frame, textvariable=cmd_warn_var, foreground="#b45309", wraplength=280).grid(row=4, column=1, sticky="w", pady=(4, 0))
+
+    selected_idx = [None]
+    loading_editor = [False]
+
+    def _update_editor_labels(*_args):
+        ctype = label_to_cmd_type.get(cmd_type_var.get(), "ai")
+        if ctype == "ai":
+            cmd_body_label_var.set("Prompt:")
+            cmd_shell_hint_var.set("")
+        elif ctype == "replacer-shell":
+            cmd_body_label_var.set("Wert:")
+            cmd_shell_hint_var.set("Wird als Befehl in der Shell ausgeführt.")
+        else:
+            cmd_body_label_var.set("Wert:")
+            cmd_shell_hint_var.set("")
+
+    def _refresh_warnings():
+        warns = find_command_prefix_warnings(commands_data, prefix=prefix_var.get() or ".")
+        cmd_warn_var.set("\n".join(warns[:3]))
+
+    def _commit_editor_to_list():
+        idx = selected_idx[0]
+        if idx is None or not (0 <= idx < len(commands_data)):
+            return
+        entry = commands_data[idx]
+        entry["trigger"] = cmd_name_var.get().strip()
+        ctype = label_to_cmd_type.get(cmd_type_var.get(), "ai")
+        entry["type"] = ctype
+        body_val = cmd_body_text.get("1.0", "end-1c")
+        if ctype == "ai":
+            entry["prompt"] = body_val
+            entry.pop("value", None)
+        else:
+            entry["value"] = body_val
+            entry.pop("prompt", None)
+
+    def _refresh_tree(select_index=None):
+        cur_pref = prefix_var.get() or "."
+        tree.delete(*tree.get_children())
+        for i, entry in enumerate(commands_data):
+            trig = entry.get("trigger", "")
+            ctype = entry.get("type", "ai")
+            tree.insert("", "end", iid=str(i), values=(f"{cur_pref}{trig}", cmd_type_to_label.get(ctype, ctype)))
+        if select_index is not None and 0 <= select_index < len(commands_data):
+            tree.selection_set(str(select_index))
+            tree.focus(str(select_index))
+            _load_editor(select_index)
+        elif commands_data:
+            tree.selection_set("0")
+            tree.focus("0")
+            _load_editor(0)
+        else:
+            selected_idx[0] = None
+            loading_editor[0] = True
+            cmd_name_var.set("")
+            cmd_type_var.set("KI")
+            cmd_body_text.delete("1.0", "end")
+            loading_editor[0] = False
+        _refresh_warnings()
+
+    def _load_editor(idx):
+        loading_editor[0] = True
+        selected_idx[0] = idx
+        entry = commands_data[idx]
+        cmd_name_var.set(entry.get("trigger", ""))
+        ctype = entry.get("type", "ai")
+        cmd_type_var.set(cmd_type_to_label.get(ctype, "KI"))
+        cmd_body_text.delete("1.0", "end")
+        body_val = entry.get("prompt", "") if ctype == "ai" else entry.get("value", "")
+        cmd_body_text.insert("1.0", body_val or "")
+        _update_editor_labels()
+        loading_editor[0] = False
+
+    def _on_tree_select(_event):
+        sel = tree.selection()
+        if not sel:
+            return
+        new_idx = int(sel[0])
+        if selected_idx[0] == new_idx:
+            return
+        if selected_idx[0] is not None:
+            _commit_editor_to_list()
+            old_idx = selected_idx[0]
+            if 0 <= old_idx < len(commands_data):
+                cur_pref = prefix_var.get() or "."
+                e = commands_data[old_idx]
+                tree.item(str(old_idx), values=(f"{cur_pref}{e.get('trigger', '')}", cmd_type_to_label.get(e.get("type", "ai"), e.get("type", "ai"))))
+        _load_editor(new_idx)
+        _refresh_warnings()
+
+    tree.bind("<<TreeviewSelect>>", _on_tree_select)
+
+    def _on_editor_change(*_args):
+        if loading_editor[0]:
+            return
+        _update_editor_labels()
+        _commit_editor_to_list()
+        idx = selected_idx[0]
+        if idx is not None and 0 <= idx < len(commands_data):
+            cur_pref = prefix_var.get() or "."
+            e = commands_data[idx]
+            tree.item(str(idx), values=(f"{cur_pref}{e.get('trigger', '')}", cmd_type_to_label.get(e.get("type", "ai"), e.get("type", "ai"))))
+        _refresh_warnings()
+
+    cmd_name_var.trace_add("write", _on_editor_change)
+    cmd_type_var.trace_add("write", _on_editor_change)
+    cmd_body_text.bind("<KeyRelease>", _on_editor_change)
+    prefix_var.trace_add("write", lambda *_a: _refresh_tree(selected_idx[0]))
+
+    def _add_command():
+        _commit_editor_to_list()
+        commands_data.append({"trigger": "neu", "type": "ai", "prompt": ""})
+        _refresh_tree(len(commands_data) - 1)
+        cmd_name_entry.focus_set()
+
+    def _delete_command():
+        idx = selected_idx[0]
+        if idx is None or not (0 <= idx < len(commands_data)):
+            return
+        trig = commands_data[idx].get("trigger", "")
+        if not messagebox.askyesno("Befehl löschen", f"Befehl '{trig}' wirklich löschen?", parent=root):
+            return
+        commands_data.pop(idx)
+        next_idx = min(idx, len(commands_data) - 1) if commands_data else None
+        _refresh_tree(next_idx)
+
+    def _move_command(delta):
+        _commit_editor_to_list()
+        idx = selected_idx[0]
+        if idx is None:
+            return
+        new_idx = idx + delta
+        if not (0 <= new_idx < len(commands_data)):
+            return
+        commands_data[idx], commands_data[new_idx] = commands_data[new_idx], commands_data[idx]
+        _refresh_tree(new_idx)
+
+    ttk.Button(list_btn_frame, text="Neu", command=_add_command).pack(side="left", padx=(0, 4))
+    ttk.Button(list_btn_frame, text="Löschen", command=_delete_command).pack(side="left", padx=(0, 4))
+    ttk.Button(list_btn_frame, text="Nach oben", command=lambda: _move_command(-1)).pack(side="left", padx=(0, 4))
+    ttk.Button(list_btn_frame, text="Nach unten", command=lambda: _move_command(1)).pack(side="left")
+
+    _refresh_tree(0 if commands_data else None)
+
+    def _snapshot_all():
+        _commit_editor_to_list()
         return (
             prov_var.get(),
             endpoint_var.get(),
@@ -2840,14 +3131,16 @@ def run_settings_window():
             delay_var.get(),
             autostart_var.get(),
             keys_cleared[0],
+            json.dumps(commands_data, sort_keys=True, ensure_ascii=False),
         )
 
-    saved_snapshot = [_snapshot_general()]
+    saved_snapshot = [_snapshot_all()]
 
     btn_frame = ttk.Frame(root, padding=(10, 4, 10, 10))
     btn_frame.pack(fill="x")
 
     def _save():
+        _commit_editor_to_list()
         prov_code = label_to_prov.get(prov_var.get(), "custom")
         values = {
             "provider": prov_code,
@@ -2858,8 +3151,10 @@ def run_settings_window():
             "trigger_delay_ms": delay_var.get().strip(),
         }
         errs = validate_settings(values)
-        if errs:
-            messagebox.showerror("Ungültige Eingaben", "\n".join(errs), parent=root)
+        cmd_errs = validate_commands(commands_data, prefix=values["prefix"])
+        all_errs = errs + cmd_errs
+        if all_errs:
+            messagebox.showerror("Ungültige Eingaben", "\n".join(all_errs), parent=root)
             return
 
         cfg = _read_config_file()
@@ -2883,8 +3178,9 @@ def run_settings_window():
 
         try:
             write_json_atomic(config_path, cfg)
+            write_json_atomic(commands_path, commands_data)
         except Exception as e:
-            messagebox.showerror("Fehler beim Speichern", f"config.json konnte nicht gespeichert werden:\n{e}", parent=root)
+            messagebox.showerror("Fehler beim Speichern", f"Dateien konnten nicht gespeichert werden:\n{e}", parent=root)
             return
 
         if autostart_var.get() != (bool(lnk_path and os.path.exists(lnk_path))):
@@ -2897,11 +3193,11 @@ def run_settings_window():
         new_key_var.set("")
         keys_cleared[0] = False
         _refresh_key_status()
-        saved_snapshot[0] = _snapshot_general()
-        messagebox.showinfo("Gespeichert", "Einstellungen wurden gespeichert.", parent=root)
+        saved_snapshot[0] = _snapshot_all()
+        messagebox.showinfo("Gespeichert", "Einstellungen und Befehle wurden gespeichert.", parent=root)
 
     def _close():
-        if _snapshot_general() != saved_snapshot[0]:
+        if _snapshot_all() != saved_snapshot[0]:
             if not messagebox.askyesno("Ungespeicherte Änderungen", "Änderungen verwerfen und schließen?", parent=root):
                 return
         root.destroy()
