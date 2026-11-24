@@ -852,15 +852,42 @@ def _notify_debounced(message, icon=NIIF_INFO):
     notify("SwiftSlate", message, icon)
 
 # --- Load config ---
-def load_config():
+def ready_after_failed_load(was_ready, initial):
+    """Bereitschaft nach einem fehlgeschlagenen Laden der Konfiguration.
+    Beim Erststart (initial=True) ist die App nicht bereit. Beim Hot Reload bleibt
+    ein vorher gültiger Stand aktiv (was_ready bleibt erhalten)."""
+    return bool(was_ready) and not initial
+
+def hot_reload_failure_message(reason):
+    """Tray Meldung, wenn ein Hot Reload an einer ungültigen Konfiguration scheitert."""
+    reason = (reason or "unbekannter Fehler").strip()
+    return f"config.json ungültig: {reason} Letzter gültiger Stand bleibt aktiv."
+
+def _config_load_failed(reason, initial):
+    """Gemeinsamer Fehlerpfad von load_config(). Gibt immer False zurück."""
+    global config_ready
+    was_ready = config_ready
+    config_ready = ready_after_failed_load(was_ready, initial)
+    if config_ready:
+        log(f"Hot reload: config invalid ({reason}), keeping last valid state")
+        if hwnd_main:
+            _notify_debounced(hot_reload_failure_message(reason), NIIF_WARNING)
+    else:
+        log(f"Config not ready: {reason}")
+    return False
+
+def load_config(initial=False):
     global config, config_ready, commands, api_keys, model, prefix, translate_prefix
     global trigger_strings, trigger_last_chars, max_buffer_len, keystroke_buffer
     global provider, temperature, custom_endpoint, key_delay, trigger_delay, spinner_mode
 
     config_path = os.path.join(script_dir, "config.json")
 
-    # Create default config.json on first run if missing
+    # Create default config.json on first run if missing. During hot reload a missing
+    # file is only reported; the last valid state stays active.
     if not os.path.exists(config_path):
+        if not initial:
+            return _config_load_failed("Datei fehlt.", initial)
         default_cfg = {
             "api_keys": [],
             "provider": "custom",
@@ -877,31 +904,27 @@ def load_config():
             log("Created initial config.json")
         except Exception as e:
             log(f"ERROR: Cannot create config.json: {e}")
-        config_ready = False
-        return False
+        return _config_load_failed("Erststart, noch nicht eingerichtet.", initial)
 
-    # Parse config JSON
+    # Parse config JSON into a local first; globals are only published after validation
     try:
         with open(config_path, "r", encoding="utf-8-sig") as f:
-            config = json.load(f)
+            new_config = json.load(f)
     except (json.JSONDecodeError, ValueError) as e:
         log(f"ERROR: config.json parse error: {e}")
-        if hwnd_main:
+        if hwnd_main and not config_ready:
             notify("SwiftSlate", f"config.json parse error: {e}", NIIF_ERROR)
-        config_ready = False
-        return False
+        return _config_load_failed(f"JSON Fehler ({e}).", initial)
     except OSError as e:
         log(f"ERROR: Cannot read config.json: {e}")
-        if hwnd_main:
+        if hwnd_main and not config_ready:
             notify("SwiftSlate", f"Cannot read config.json: {e}", NIIF_ERROR)
-        config_ready = False
-        return False
+        return _config_load_failed("Datei nicht lesbar.", initial)
 
-    prob = config_problem(config)
+    prob = config_problem(new_config)
     if prob:
-        log(f"Config not ready: {prob}")
-        config_ready = False
-        return False
+        return _config_load_failed(prob, initial)
+    config = new_config
 
     parsed_keys = config.get("api_keys", [])
     if not isinstance(parsed_keys, list):
@@ -1139,7 +1162,8 @@ def _start_file_watcher():
                         # save changes the mtime and retriggers a reload
                         _config_mtime = ct
                         _commands_mtime = cm
-                        log("Hot reload: config invalid, kept previous state")
+                        log("Hot reload: config invalid, kept previous state" if config_ready
+                            else "Hot reload: config still not ready")
                         # load_config() already raised a specific notification (parse error with
                         # position, missing keys, bad endpoint). A generic one here replaced that
                         # balloon microseconds later and threw the useful detail away.
@@ -3428,7 +3452,7 @@ def main():
         ctypes.windll.user32.MessageBoxW(None, "Another SwiftSlate instance is already running.", "SwiftSlate", 0x30)
         return
 
-    load_config()
+    load_config(initial=True)
     _start_file_watcher()
 
     # Register clipboard exclusion formats
