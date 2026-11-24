@@ -30,6 +30,60 @@ Type a trigger like **`?fix`** at the end of any text, in any app, and watch it 
 
 <br>
 
+## Dieser Fork
+
+Dieses Repository ist ein Fork von [Musheer360/SwiftSlate-Desktop](https://github.com/Musheer360/SwiftSlate-Desktop) (MIT-Lizenz, vielen Dank an Musheer360 für das Originalprojekt!).
+
+**Was in diesem Fork anders ist:**
+- Auslöser-Präfix `.` statt `?` mit konfigurierbarer Tipp-Pause (`trigger_delay_ms`, Standard 1000 ms) und sicherer Erkennung (keine Satzpunkte, URLs oder Dateinamen)
+- Eigenes Tray- und Fenster-Icon (`assets/icon.ico`), Tray-Icon direkt ab Programmstart
+- Grafisches Einstellungsfenster (`tkinter`) für Allgemein-Einstellungen und Befehls-Editor
+- Deutsche Standardbefehle in `commands.json`
+- Eigener generischer Installer unter `install/`
+
+**Beispiel für eine OpenAI-kompatible Schnittstelle (ohne Key im Repo):**
+- Endpoint: `https://chat-ai.academiccloud.de/v1` (GWDG SAIA, Beispiel)
+- Modell: z. B. `deepseek-v4.1-flash-1017`
+- Den eigenen API-Key ausschließlich lokal im Einstellungsfenster oder in der lokalen `config.json` eintragen.
+
+### Installation (Fork)
+
+1. `Install-SwiftSlate.ps1` aus dem [Release v1.0.0](https://github.com/codingismynewgaming/SwiftSlate-Desktop/releases/tag/v1.0.0) (bzw. unter `install/Install-SwiftSlate.ps1`) herunterladen.
+2. In einer normalen PowerShell (ohne Adminrechte) ausführen:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-SwiftSlate.ps1
+```
+
+Beispiele mit Parametern:
+
+```powershell
+# OpenAI-kompatibler Endpoint (z. B. GWDG SAIA) mit API-Key-Abfrage
+.\Install-SwiftSlate.ps1 -Endpoint https://chat-ai.academiccloud.de/v1 -Model deepseek-v4.1-flash-1017 -SetKey
+
+# Lokales Ollama ohne API-Key
+.\Install-SwiftSlate.ps1 -Endpoint http://localhost:11434/v1 -Model gemma3:12b
+```
+
+### Deutsche Standardbefehle (`commands.json`)
+
+| Auslöser | Typ | Beschreibung |
+|---|---|---|
+| `.fix` | KI | Rechtschreibung, Grammatik und Zeichensetzung korrigieren |
+| `.kurz` | KI | Text deutlich kürzen, Kernaussage und Sprache behalten |
+| `.en` | KI | Text ins Englische übersetzen |
+| `.de` | KI | Text ins Deutsche übersetzen |
+| `.höflich` | KI | Text höflich und freundlich umformulieren |
+| `.hoeflich` | KI | Text höflich und freundlich umformulieren (ohne Umlaut) |
+| `.locker` | KI | Text locker und freundlich formulieren |
+| `.besser` | KI | Klarheit und Lesefluss verbessern |
+| `.mensch` | KI | Text natürlich und menschlich formulieren |
+| `.antwort` | KI | Kurze, passende Antwort auf eine Nachricht schreiben |
+| `.datum` | Shell | Aktuelles deutsches Datum einfügen |
+| `.zeit` | Shell | Aktuelle Uhrzeit (24h) einfügen |
+
+---
+
 ## 📋 Table of Contents
 
 - [Quick Demo](#-quick-demo)

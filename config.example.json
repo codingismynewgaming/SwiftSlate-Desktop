@@ -1,0 +1,11 @@
+{
+  "api_keys": [],
+  "provider": "custom",
+  "endpoint": "https://api.example.com/v1",
+  "model": "modellname",
+  "temperature": 0.3,
+  "prefix": ".",
+  "trigger_delay_ms": 1000,
+  "key_delay": 200,
+  "spinner": "animated"
+}
