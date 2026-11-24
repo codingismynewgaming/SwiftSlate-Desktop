@@ -165,6 +165,14 @@ kernel32.GetModuleHandleW.restype = wt.HMODULE
 # -- Notifications (Shell32) --
 user32.LoadIconW.argtypes = [wt.HINSTANCE, wt.LPCWSTR]
 user32.LoadIconW.restype = wt.HICON
+user32.LoadImageW.argtypes = [wt.HINSTANCE, wt.LPCWSTR, wt.UINT, ctypes.c_int, ctypes.c_int, wt.UINT]
+user32.LoadImageW.restype = wt.HICON
+user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+user32.GetSystemMetrics.restype = ctypes.c_int
+user32.RegisterWindowMessageW.argtypes = [wt.LPCWSTR]
+user32.RegisterWindowMessageW.restype = wt.UINT
+user32.DestroyIcon.argtypes = [wt.HICON]
+user32.DestroyIcon.restype = wt.BOOL
 
 class GUID(ctypes.Structure):
     _fields_ = [
@@ -244,6 +252,13 @@ class WNDCLASSEXW(ctypes.Structure):
 
 # --- Globals ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
+ICON_PATH = os.path.join(script_dir, "assets", "icon.ico")
+IMAGE_ICON = 1
+LR_LOADFROMFILE = 0x0010
+SM_CXICON = 11
+SM_CXSMICON = 49
+_WM_TASKBARCREATED = 0
+_custom_icon_handles = []
 config = {}
 config_ready = False
 commands = {}
@@ -734,6 +749,16 @@ def log(msg):
             pass
 
 # --- Notifications ---
+def _load_app_icon(size):
+    """Load custom icon from assets/icon.ico at `size`, falling back to IDI_APPLICATION."""
+    if os.path.isfile(ICON_PATH):
+        hicon = user32.LoadImageW(None, ICON_PATH, IMAGE_ICON, size, size, LR_LOADFROMFILE)
+        if hicon:
+            _custom_icon_handles.append(hicon)
+            return hicon
+    log("Icon not found, using default")
+    return user32.LoadIconW(None, ctypes.cast(32512, wt.LPCWSTR))
+
 def _ensure_notify_icon():
     """Add the notification tray icon if not already present."""
     global _notify_icon_added
@@ -746,8 +771,8 @@ def _ensure_notify_icon():
     nid.uID = _NOTIFY_ID
     nid.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP | NIF_MESSAGE
     nid.uCallbackMessage = WM_TRAYICON
-    # Use default app icon (Python's icon shows in header, which is fine)
-    nid.hIcon = user32.LoadIconW(None, ctypes.cast(32512, wt.LPCWSTR))
+    icon_size = user32.GetSystemMetrics(SM_CXSMICON) or 16
+    nid.hIcon = _load_app_icon(icon_size)
     nid.szTip = "SwiftSlate Desktop"
 
     if shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
@@ -3352,6 +3377,10 @@ def wnd_proc(hwnd, msg, wparam, lparam):
 
         elif msg == WM_DESTROY:
             user32.PostQuitMessage(0)
+        elif _WM_TASKBARCREATED and msg == _WM_TASKBARCREATED:
+            global _notify_icon_added
+            _notify_icon_added = False
+            _ensure_notify_icon()
     except Exception as e:
         log(f"ERROR in wnd_proc: {e}")
 
@@ -3378,7 +3407,7 @@ def acquire_singleton():
 
 # --- Main ---
 def main():
-    global hwnd_main, cf_exclude, cf_no_history, cf_no_cloud, log_file
+    global hwnd_main, cf_exclude, cf_no_history, cf_no_cloud, log_file, _WM_TASKBARCREATED
 
     if "--settings" in sys.argv:
         run_settings_window()
@@ -3406,6 +3435,7 @@ def main():
     cf_exclude = user32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing")
     cf_no_history = user32.RegisterClipboardFormatW("CanIncludeInClipboardHistory")
     cf_no_cloud = user32.RegisterClipboardFormatW("CanUploadToCloudClipboard")
+    _WM_TASKBARCREATED = user32.RegisterWindowMessageW("TaskbarCreated")
     log("Clipboard formats registered")
 
     # Create window class
@@ -3419,6 +3449,8 @@ def main():
     wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
     wc.lpfnWndProc = wnd_proc_cb
     wc.hInstance = hinstance
+    wc.hIcon = _load_app_icon(user32.GetSystemMetrics(SM_CXICON) or 32)
+    wc.hIconSm = _load_app_icon(user32.GetSystemMetrics(SM_CXSMICON) or 16)
     wc.lpszClassName = class_name
 
     if not user32.RegisterClassExW(ctypes.byref(wc)):
@@ -3443,6 +3475,8 @@ def main():
         ctypes.windll.user32.MessageBoxW(
             None, "SwiftSlate could not start: failed to create its message window.", "SwiftSlate", 0x10)
         return
+
+    _ensure_notify_icon()
 
     # Register Raw Input
     rid = RAWINPUTDEVICE()
@@ -3480,6 +3514,9 @@ def main():
 
     # Cleanup
     _remove_notify_icon()
+    for hicon in _custom_icon_handles:
+        user32.DestroyIcon(hicon)
+    _custom_icon_handles.clear()
     log("Shutting down")
     if log_file:
         log_file.close()
