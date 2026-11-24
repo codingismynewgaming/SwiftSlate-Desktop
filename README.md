@@ -2,520 +2,360 @@
 
 <br>
 
+<img src="assets/icon.png" alt="SwiftSlateJMKEdition Icon" width="96">
+
 # SwiftSlateJMKEdition
 
-### System-wide AI text transformation for Windows
+### Systemweite KI Textbearbeitung für Windows
 
-Type a trigger like **`?fix`** at the end of any text, in any app, and watch it get replaced — instantly.
+Schreib einen Befehl wie **`.fix`** ans Ende eines Textes, in jeder App, warte kurz, und der Text wird direkt ersetzt.
 
 <br>
 
-[![Windows](https://img.shields.io/badge/Windows_10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white)](#-getting-started)
-[![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)](#%EF%B8%8F-tech-stack)
+[![Windows](https://img.shields.io/badge/Windows_10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white)](#-installation)
+[![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](#-technik)
 [![License: MIT](https://img.shields.io/badge/MIT-blue?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/codingismynewgaming/SwiftSlateJMKEdition?style=for-the-badge)](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/releases/latest)
 
 <br>
 
-[<img src="https://img.shields.io/badge/⬇_Install-282828?style=for-the-badge" alt="Install" height="36">](#-getting-started)
+[<img src="https://img.shields.io/badge/⬇_Installieren-282828?style=for-the-badge" alt="Installieren" height="36">](#-installation)
 &nbsp;&nbsp;
-[<img src="https://img.shields.io/badge/🐛_Report_Bug-282828?style=for-the-badge" alt="Report Bug" height="36">](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/issues)
-&nbsp;&nbsp;
-[<img src="https://img.shields.io/badge/💡_Request_Feature-282828?style=for-the-badge" alt="Request Feature" height="36">](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/issues)
-
-<br>
-
-> Linux support coming soon.
+[<img src="https://img.shields.io/badge/🐛_Fehler_melden-282828?style=for-the-badge" alt="Fehler melden" height="36">](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/issues)
 
 </div>
 
 <br>
 
-## Dieser Fork
+> [!NOTE]
+> **Dies ist ein Fork.** SwiftSlateJMKEdition basiert auf [Musheer360/SwiftSlate-Desktop](https://github.com/Musheer360/SwiftSlate-Desktop) von [Musheer Alam](https://github.com/Musheer360).
+> *This project is a fork of Musheer360/SwiftSlate-Desktop. All credit for the original idea and code goes to Musheer Alam.*
+>
+> **Herzlichen Dank an Musheer360** für das großartige Originalprojekt und dafür, dass er es unter der MIT Lizenz frei zur Verfügung stellt. Ohne seine Arbeit gäbe es diese Edition nicht. Wenn dir das Tool gefällt, gib bitte auch [dem Original](https://github.com/Musheer360/SwiftSlate-Desktop) einen ⭐.
 
-**SwiftSlateJMKEdition** (bis v1.0.0 „SwiftSlate Desktop“ Fork, Repo früher `SwiftSlate-Desktop`) ist ein Fork von [Musheer360/SwiftSlate-Desktop](https://github.com/Musheer360/SwiftSlate-Desktop) (MIT-Lizenz, vielen Dank an Musheer360 für das Originalprojekt!).
+<br>
 
-**Was in diesem Fork anders ist:**
-- Auslöser-Präfix `.` statt `?` mit konfigurierbarer Tipp-Pause (`trigger_delay_ms`, Standard 1000 ms) und sicherer Erkennung (keine Satzpunkte, URLs oder Dateinamen)
-- Eigenes Tray- und Fenster-Icon (`assets/icon.ico`), Tray-Icon direkt ab Programmstart
-- Tray-Icon: **Klick oder Doppelklick** öffnet die Einstellungen, **Rechtsklick** zeigt das Menü (Einstellungen, Beenden)
-- Grafisches Einstellungsfenster (`tkinter`) für Allgemein-Einstellungen und Befehls-Editor
-- Deutsche Standardbefehle in `commands.json`
-- Eigener generischer Installer unter `install/`
+## 📋 Inhalt
 
-**Beispiel für eine OpenAI-kompatible Schnittstelle (ohne Key im Repo):**
-- Endpoint: `https://chat-ai.academiccloud.de/v1` (GWDG SAIA, Beispiel)
-- Modell: z. B. `deepseek-v4.1-flash-1017`
-- Den eigenen API-Key ausschließlich lokal im Einstellungsfenster oder in der lokalen `config.json` eintragen.
+- [Kurz gezeigt](#-kurz-gezeigt)
+- [Funktionen](#-funktionen)
+- [Installation](#-installation)
+- [Bedienung](#%EF%B8%8F-bedienung)
+- [Befehle](#-befehle)
+- [KI Anbieter](#-ki-anbieter)
+- [Konfiguration](#%EF%B8%8F-konfiguration)
+- [Eigene Befehle](#%EF%B8%8F-eigene-befehle)
+- [So funktioniert es](#-so-funktioniert-es)
+- [Fehlersuche](#-fehlersuche)
+- [Datenschutz und Sicherheit](#-datenschutz-und-sicherheit)
+- [Technik](#-technik)
+- [Bekannte Grenzen](#%EF%B8%8F-bekannte-grenzen)
+- [Mitmachen](#-mitmachen)
+- [Lizenz und Dank](#-lizenz-und-dank)
 
-### Installation (Fork)
+<br>
 
-1. `Install-SwiftSlateJMKEdition.ps1` aus dem [neuesten Release](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/releases/latest) (bzw. unter `install/Install-SwiftSlateJMKEdition.ps1`) herunterladen.
-2. In einer normalen PowerShell (ohne Adminrechte) ausführen:
+## ⚡ Kurz gezeigt
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-SwiftSlateJMKEdition.ps1
+```
+Du tippst:   "ich hab das vergesen .fix"     (dann 1 Sekunde Pause)
+Du siehst:   "ich hab das vergesen ◐"        (Spinner läuft)
+Ergebnis:    "Ich habe das vergessen."
 ```
 
-Beispiele mit Parametern:
+```
+Du tippst:   "Hallo, wie geht es dir? .en"
+Ergebnis:    "Hello, how are you?"
+```
+
+```
+Du tippst:   "Heute ist .datum"
+Ergebnis:    "Heute ist Dienstag, 24. November 2026"
+```
+
+<br>
+
+## ✨ Funktionen
+
+| | Funktion | Beschreibung |
+|:--|:--|:--|
+| 🌐 | **Überall nutzbar** | Erkennt Befehle systemweit über die Windows Raw Input API, in Browser, Editor, Messenger und anderen Apps. |
+| ⌨️ | **Sichere Auslösung** | Befehl ans Textende mit Leerzeichen davor: `Text .fix`. Satzpunkte, `z.B.`, `3.5`, `notiz.txt` oder URLs lösen nicht aus. |
+| ⏱️ | **Tipp Pause** | Der Befehl startet erst nach einer kurzen Pause (Standard 1 s, einstellbar 0 bis 5000 ms). Wer weitertippt, das Fenster oder den Fokus wechselt, bricht ab. |
+| 🪟 | **Einstellungsfenster** | Grafische Oberfläche (tkinter) für Anbieter, Endpoint, Modell, Key, Präfix, Tipp Pause und Autostart. Öffnen per Klick auf das Tray Icon. |
+| 🧩 | **Befehls Editor** | Befehle und Prompts direkt im Fenster anlegen, bearbeiten, umbenennen, sortieren und löschen, mit Prüfung auf Fehler. |
+| 🤖 | **Freie Schnittstelle** | Jede OpenAI kompatible Schnittstelle (Cloud oder lokal, z. B. Ollama, LM Studio). Endpoint und Modell frei wählbar, Key optional. Gemini und Groq gehen ebenfalls. |
+| 🔄 | **Hot Reload** | Änderungen an `config.json` und `commands.json` gelten nach etwa 2 Sekunden. Ist eine Datei fehlerhaft, bleibt der letzte gültige Stand aktiv, dazu kommt eine Meldung im Tray. |
+| 🔁 | **Robuste Antworten** | Wiederholung bei HTTP 429 (mit `Retry-After`), Key Rotation, `<think>` Blöcke von Reasoning Modellen werden entfernt, `content: null` wird abgefangen. Der Originaltext bleibt bei Fehlern erhalten. |
+| ↩️ | **Rückgängig** | `.undo` stellt den Text vor der letzten Ersetzung wieder her. |
+| 🎨 | **Eigenes Icon** | Indigo Icon im Tray und im Einstellungsfenster, ab dem Start sichtbar, auch nach einem Explorer Neustart. |
+| 📦 | **Geprüfter Installer** | Lädt vom Release Tag und prüft jede Datei per SHA256. Übernimmt Einstellungen und Befehle einer älteren Installation. |
+| 🚀 | **Autostart** | Optional mit Windows starten, im Installer oder im Einstellungsfenster umschaltbar. |
+
+<br>
+
+## 🚀 Installation
+
+**Voraussetzungen:** Windows 10 oder 11, Python 3.10+ mit tkinter (Installer von [python.org](https://www.python.org/downloads/windows/)). Fehlt Python, installiert der Installer Python 3.13 per `winget` im Benutzerkontext.
+
+1. `Install-SwiftSlateJMKEdition.ps1` aus dem [neuesten Release](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/releases/latest) herunterladen. Die Prüfsumme steht in `SHA256SUMS.txt`.
+2. In einer **normalen PowerShell ohne Adminrechte** ausführen:
 
 ```powershell
-# OpenAI-kompatibler Endpoint (z. B. GWDG SAIA) mit API-Key-Abfrage
-.\Install-SwiftSlateJMKEdition.ps1 -Endpoint https://chat-ai.academiccloud.de/v1 -Model deepseek-v4.1-flash-1017 -SetKey
+cd $env:USERPROFILE\Downloads
+Invoke-WebRequest -Uri https://github.com/codingismynewgaming/SwiftSlateJMKEdition/releases/download/v1.1.0/Install-SwiftSlateJMKEdition.ps1 -OutFile .\Install-SwiftSlateJMKEdition.ps1 -UseBasicParsing
+(Get-FileHash .\Install-SwiftSlateJMKEdition.ps1).Hash   # mit SHA256SUMS.txt vergleichen
+powershell -ExecutionPolicy Bypass -File .\Install-SwiftSlateJMKEdition.ps1 -Endpoint https://api.example.com/v1 -Model modellname
+```
 
-# Lokales Ollama ohne API-Key
+Bei einer Neuinstallation fragt der Installer den API Key verdeckt ab. Enter ohne Eingabe lässt ihn leer, z. B. für ein lokales Ollama.
+
+**Weitere Aufrufe:**
+
+```powershell
+# Lokales Ollama ohne Key
 .\Install-SwiftSlateJMKEdition.ps1 -Endpoint http://localhost:11434/v1 -Model gemma3:12b
+
+.\Install-SwiftSlateJMKEdition.ps1 -SetKey          # nur den Key neu setzen
+.\Install-SwiftSlateJMKEdition.ps1 -ResetConfig     # config.json neu schreiben
+.\Install-SwiftSlateJMKEdition.ps1 -ResetCommands   # Standardbefehle wiederherstellen (alte Datei als .bak)
+.\Install-SwiftSlateJMKEdition.ps1 -NoAutostart     # ohne Autostart
+.\Install-SwiftSlateJMKEdition.ps1 -Uninstall       # entfernen
 ```
 
-Installiert wird nach `%LOCALAPPDATA%\SwiftSlateJMKEdition`. Eine alte Installation unter `%LOCALAPPDATA%\SwiftSlate` wird erkannt: `config.json` und `commands.json` werden übernommen, die alte Instanz beendet und die alte Autostart-Verknüpfung `SwiftSlate.lnk` entfernt. Der alte Ordner bleibt stehen und kann danach von Hand gelöscht werden.
+**Was der Installer macht:**
+- Installiert nach `%LOCALAPPDATA%\SwiftSlateJMKEdition` (Programm in `app`, eigene Python Umgebung in `venv`).
+- Lädt Programm, Befehle und Icon vom Release Tag und bricht bei falscher SHA256 Prüfsumme ab.
+- Schützt `config.json` per Dateirechten, nur dein Benutzer kann sie lesen.
+- Legt die Autostart Verknüpfung `SwiftSlateJMKEdition.lnk` an und startet die App.
+- Erkennt eine ältere Installation unter `%LOCALAPPDATA%\SwiftSlate`, übernimmt `config.json` und `commands.json`, beendet die alte Instanz und entfernt deren Autostart. Der alte Ordner bleibt stehen und kann danach von Hand gelöscht werden.
+- Mehrfach ausführen ist sicher. Bestehende Einstellungen und Befehle bleiben erhalten.
 
-Fehler beim Öffnen der Einstellungen landen in `debug.log` im Programmordner (ohne API-Keys).
+<br>
 
-### Deutsche Standardbefehle (`commands.json`)
+## 🖱️ Bedienung
 
-| Auslöser | Typ | Beschreibung |
-|---|---|---|
+| Aktion | Ergebnis |
+|:--|:--|
+| **Klick** oder **Doppelklick** auf das Tray Icon | Einstellungsfenster öffnet sich (ist es offen, kommt es nach vorn) |
+| **Rechtsklick** auf das Tray Icon | Menü mit `Einstellungen…` und `Beenden` |
+| Text tippen, dann ` .befehl` ans Ende, kurz warten | Text wird ersetzt |
+
+Das Icon liegt im Infobereich neben der Uhr, eventuell hinter dem Pfeil `^`. Beim ersten Start ohne Einstellungen öffnet sich das Fenster von selbst.
+
+**Einstellungsfenster, Reiter „Allgemein“:** Anbieter, Endpoint, Modell, API Key (wird nur maskiert angezeigt, neue Keys hinzufügen, alle Keys entfernen), Temperatur (0.0 bis 2.0), Präfix, Tipp Pause (0 bis 5000 ms), Autostart.
+
+**Reiter „Befehle“:** Liste aller Befehle mit Typ. Name, Typ (KI, Text, Shell) und Prompt bzw. Wert bearbeiten. Buttons für Neu, Löschen, Nach oben, Nach unten. Gespeichert wird atomar, die laufende App übernimmt die Änderung per Hot Reload.
+
+<br>
+
+## 🧩 Befehle
+
+### Standardbefehle (`commands.json`)
+
+| Befehl | Typ | Beschreibung |
+|:--|:--|:--|
 | `.fix` | KI | Rechtschreibung, Grammatik und Zeichensetzung korrigieren |
 | `.kurz` | KI | Text deutlich kürzen, Kernaussage und Sprache behalten |
 | `.en` | KI | Text ins Englische übersetzen |
 | `.de` | KI | Text ins Deutsche übersetzen |
 | `.höflich` | KI | Text höflich und freundlich umformulieren |
-| `.hoeflich` | KI | Text höflich und freundlich umformulieren (ohne Umlaut) |
+| `.hoeflich` | KI | wie `.höflich`, ohne Umlaut |
 | `.locker` | KI | Text locker und freundlich formulieren |
 | `.besser` | KI | Klarheit und Lesefluss verbessern |
 | `.mensch` | KI | Text natürlich und menschlich formulieren |
 | `.antwort` | KI | Kurze, passende Antwort auf eine Nachricht schreiben |
-| `.datum` | Shell | Aktuelles deutsches Datum einfügen |
-| `.zeit` | Shell | Aktuelle Uhrzeit (24h) einfügen |
+| `.datum` | Shell | Aktuelles Datum einfügen, z. B. „Dienstag, 24. November 2026“ |
+| `.zeit` | Shell | Aktuelle Uhrzeit (24 h) einfügen |
 
----
+### Eingebaute Befehle
 
-## 📋 Table of Contents
-
-- [Quick Demo](#-quick-demo)
-- [Features](#-features)
-- [Getting Started](#-getting-started)
-- [Built-in Commands](#-built-in-commands)
-- [Supported AI Providers](#-supported-ai-providers)
-- [API Key Management](#-api-key-management)
-- [Configuration](#%EF%B8%8F-configuration)
-- [Custom Commands](#%EF%B8%8F-custom-commands)
-- [How It Works](#-how-it-works)
-- [Debug Mode](#-debug-mode)
-- [Privacy & Security](#-privacy--security)
-- [Tech Stack](#%EF%B8%8F-tech-stack)
-- [Building from Source](#-building-from-source)
-- [Known Limitations](#%EF%B8%8F-known-limitations)
-- [Contributing](#-contributing)
-- [Support the Project](#-support-the-project)
-- [License](#-license)
+| Befehl | Wirkung |
+|:--|:--|
+| `.undo` | Text vor der letzten Ersetzung wiederherstellen |
+| `.translate:XX` | In eine Sprache übersetzen, XX = Sprachcode mit 2 bis 5 Zeichen, z. B. `.translate:es` |
+| `.copy` | Text vor dem Befehl in die interne Ablage kopieren |
+| `.cut` | Text vor dem Befehl ausschneiden |
+| `.paste` | Ablage hinter den Text einfügen (sonst Windows Zwischenablage) |
+| `.replace` | Ganzen Text durch die Ablage ersetzen (sonst Windows Zwischenablage) |
 
 <br>
 
-## ⚡ Quick Demo
+## 🤖 KI Anbieter
 
-```
-You type:     "i dont no whats hapening ?fix"
-You see:      "i dont no whats hapening ◐"  (spinner animates)
-Result:       "I don't know what's happening."
-```
-
-```
-You type:     "hey can u send me that file ?formal"
-You see:      "hey can u send me that file ◐"  (spinner animates)
-Result:       "Could you please share the file at your earliest convenience?"
-```
-
-```
-You type:     "Hello, how are you? ?translate:es"
-You see:      "Hello, how are you? ◐"  (spinner animates)
-Result:       "Hola, ¿cómo estás?"
-```
-
-<br>
-
-## ✨ Features
-
-<table>
-<tr>
-<td width="50%">
-
-### 🌐 Works Everywhere
-Integrates at the system level via Windows Raw Input API. Works in **every app** — browsers, editors, messaging apps, terminals, IDEs, and more.
-
-### ⚡ Instant Inline Replacement
-Type, trigger, done. The AI response replaces your text directly in the same field — no copy-pasting, no app switching. While processing, an animated spinner appends to your text (e.g., `how r u ◐`) so you always see progress.
-
-### 🔑 Multi-Key Rotation
-Add multiple API keys for automatic round-robin rotation. If one key hits a rate limit, SwiftSlate seamlessly switches to the next.
-
-</td>
-<td width="50%">
-
-### 🤖 Multi-Provider AI
-Ships with Google Gemini, Groq, or connect **any OpenAI-compatible endpoint** — cloud providers, or **local LLMs** like [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai), and others running locally.
-
-### 🛠️ Two Command Types
-**AI commands** send text to your provider for intelligent transformation. **Text replacer commands** run locally and need no API key, except `?ip`, which performs a public-IP lookup.
-
-### 🔄 Hot Reload
-Edit your config or commands file and changes apply within 2 seconds — no restart needed.
-
-</td>
-</tr>
-</table>
-
-<br>
-
-## 🚀 Getting Started
-
-### One-Line Install
-
-```powershell
-irm https://raw.githubusercontent.com/Musheer360/SwiftSlate-Desktop/master/install.ps1 | iex
-```
-
-If that fails, use the jsDelivr CDN mirror:
-
-```powershell
-irm https://cdn.jsdelivr.net/gh/Musheer360/SwiftSlate-Desktop@master/install.ps1 | iex
-```
-
-> [!NOTE]
-> After a release, the jsDelivr CDN can serve the previous version for up to ~12 hours. If an update reports the old version, re-run using the GitHub raw command above.
->
-> Run the installer in a normal (non-admin) window. Uninstalling removes everything, including `config.json` and `commands.json` (the installer asks for confirmation first).
-
-The installer handles everything — downloads a portable Python runtime if needed, sets up the config, and optionally adds to startup.
-
-Run the same command again to **update** or **uninstall**.
-
-### Prerequisites
-
-| Requirement | Details |
-|:------------|:--------|
-| **Windows** | Windows 10 or 11 (64-bit) |
-| **API Key** | Free Gemini key at [aistudio.google.com](https://aistudio.google.com/api-keys), or Groq at [console.groq.com/keys](https://console.groq.com/keys), or any OpenAI-compatible provider. Text replacer commands don't consume a key, but the app requires at least one API key in `config.json` to start. |
-
-> [!NOTE]
-> Python is **not** required on your system. If not found, the installer downloads an embedded Python runtime (~11 MB) that lives entirely inside the `.swiftslate` folder.
-
-<br>
-
-## 🧩 Built-in Commands
-
-SwiftSlate ships with **9 AI-powered commands**, dynamic translation, **3 built-in shell replacers** (`?date`, `?time`, `?ip`), and **clipboard commands** — ready to use out of the box:
-
-| Trigger | Action | Example |
-|:--------|:-------|:--------|
-| **`?fix`** | Fix grammar, spelling & punctuation | `i dont no whats hapening` → `I don't know what's happening.` |
-| **`?improve`** | Improve clarity and readability | `The thing is not working good` → `The feature isn't functioning properly.` |
-| **`?shorten`** | Shorten while keeping meaning | `I wanted to let you know that I will not be able to attend` → `I can't attend.` |
-| **`?expand`** | Expand with more detail | `Meeting postponed` → `The meeting has been postponed. We'll share the updated schedule soon.` |
-| **`?formal`** | Rewrite in professional tone | `hey can u send me that file` → `Could you please share the file at your earliest convenience?` |
-| **`?casual`** | Rewrite in friendly tone | `Please confirm your attendance` → `Hey, you coming? Let me know!` |
-| **`?emoji`** | Add relevant emojis | `I love this new feature` → `I love this new feature! 🎉❤️✨` |
-| **`?human`** | Humanize AI-generated text | `I hope this email finds you well` → `Hope you're doing well` |
-| **`?reply`** | Generate a contextual reply | `Do you want to grab lunch?` → `Sure! What time works for you?` |
-| **`?undo`** | Restore text before last replacement | Reverts to your original text |
-| **`?translate:XX`** | Translate to any language | `Hello` **`?translate:es`** → `Hola` |
-
-### Text Replacers (instant, offline)
-
-| Trigger | Action |
-|:--------|:-------|
-| **`?date`** | Today's date |
-| **`?time`** | Current time |
-| **`?ip`** | Public IP address (queries ifconfig.me) |
-
-### Clipboard Commands
-
-| Trigger | Action |
-|:--------|:-------|
-| **`?copy`** | Copy preceding text to internal clipboard |
-| **`?cut`** | Cut preceding text |
-| **`?paste`** | Paste after existing text (falls back to system clipboard if internal stack is empty) |
-| **`?replace`** | Replace all text with clipboard content (falls back to system clipboard if internal stack is empty) |
-
-<br>
-
-## 🤖 Supported AI Providers
-
-| Provider | Recommended Models | Notes |
-|:---------|:-------|:------|
-| **Google Gemini** (default) | `gemini-3.5-flash-lite` (default), `gemini-3.6-flash` | Free tier at [aistudio.google.com](https://aistudio.google.com/api-keys). Thinking level set per model for fast inline transforms. |
-| **Groq** | `openai/gpt-oss-120b` (default), `qwen/qwen3.6-27b` | Free tier at [console.groq.com](https://console.groq.com/keys). Per-model reasoning params applied automatically. |
-| **Custom (OpenAI-compatible)** | Any model your endpoint supports | Works with Ollama, LM Studio, vLLM, any `/v1/chat/completions` endpoint |
+| Anbieter | Hinweise |
+|:--|:--|
+| **OpenAI kompatible Schnittstelle** (Standard) | Beliebiger `/v1/chat/completions` Endpoint, z. B. `https://api.example.com/v1`, Ollama (`http://localhost:11434/v1`), LM Studio, vLLM. Modellname frei. Key optional. |
+| **Google Gemini** | Key von [aistudio.google.com](https://aistudio.google.com/api-keys). Modelle werden gegen die Live Liste des Anbieters geprüft. |
+| **Groq** | Key von [console.groq.com](https://console.groq.com/keys). Modelle werden gegen die Live Liste des Anbieters geprüft. |
 
 > [!TIP]
-> For local LLMs, set the endpoint to your machine's local address (e.g., `http://localhost:11434/v1` for Ollama).
+> Mehrere Keys werden reihum genutzt. Ein Key mit HTTP 429 wird kurz pausiert, ein Key mit 401/403 für 15 Minuten übersprungen. Bei einem `http://` Endpoint außerhalb von localhost warnt die App, weil der Key dann unverschlüsselt übertragen wird.
 
 <br>
 
-## 🔑 API Key Management
+## ⚙️ Konfiguration
 
-SwiftSlate supports multiple API keys with intelligent rotation:
+Die Dateien liegen im Programmordner `%LOCALAPPDATA%\SwiftSlateJMKEdition\app`. Am einfachsten bearbeitest du sie über das Einstellungsfenster.
 
-| Feature | Details |
-|:--------|:--------|
-| **Round-Robin Rotation** | Keys are used in turn to spread usage evenly |
-| **Rate-Limit Handling** | If a key gets rate-limited (HTTP 429), SwiftSlate tracks the cooldown and skips it automatically |
-| **Invalid Key Detection** | Keys returning 401/403 errors are marked invalid and excluded from rotation |
-| **Automatic Retry** | Transient network errors wait 1 second before retrying (per attempt); server errors rotate to the next key |
+**config.json** (Beispiel ohne echte Daten, siehe `config.example.json`)
 
-> [!TIP]
-> Adding **2–3 API keys** helps avoid rate limits during heavy use.
-
-<br>
-
-## ⚙️ Configuration
-
-All settings live in `%USERPROFILE%\.swiftslate\` and hot-reload automatically:
-
-**config.json**
 ```json
 {
-  "api_keys": ["your-key-1", "your-key-2"],
-  "model": "gemini-3.5-flash-lite",
-  "provider": "gemini",
-  "temperature": 0.5,
-  "prefix": "?",
+  "api_keys": [],
+  "provider": "custom",
+  "endpoint": "https://api.example.com/v1",
+  "model": "modellname",
+  "temperature": 0.3,
+  "prefix": ".",
+  "trigger_delay_ms": 1000,
   "key_delay": 200,
   "spinner": "animated"
 }
 ```
 
-| Field | Description |
-|:------|:------------|
-| `api_keys` | Array of API keys (supports multiple for rotation) |
-| `model` | Model name for your provider |
-| `provider` | `groq`, `gemini`, or `custom` |
-| `temperature` | Response creativity (0.0 = deterministic, 1.0 = creative) |
-| `prefix` | Trigger prefix character (default: `?`) |
-| `endpoint` | Required for `custom` provider (e.g., `http://localhost:11434/v1`) |
-| `key_delay` | Milliseconds between dependent keystrokes (default: `200`). Decrease to `100` on fast machines for snappier response, increase to `300` on very slow machines if text replacement glitches. The spinner animation speed automatically scales with this value. |
-| `spinner` | Progress indicator mode: `animated` (default — spinning ◐◓◑◒), `static` (shows `[Processing...]` with zero animation keystrokes — the most reliable option for slow machines), or `off` (no visual feedback). |
-
-> [!TIP]
-> The installer's model prompt fetches the **live** model list from Gemini/Groq using the key you enter, so newly released models show up immediately. If a `model` in `config.json` isn't one of the app's tuned defaults, SwiftSlate checks it against that same live catalog on load (and on every hot-reload) before falling back — so any model your key can access is usable, not just the curated ones. Only models the provider has explicitly retired are always replaced with the default.
+| Feld | Bedeutung |
+|:--|:--|
+| `api_keys` | Liste von API Keys, mehrere werden reihum genutzt. Bei `custom` darf die Liste leer sein. |
+| `provider` | `custom` (OpenAI kompatibel), `gemini` oder `groq` |
+| `endpoint` | Basis URL der Schnittstelle, nötig bei `custom` |
+| `model` | Modellname |
+| `temperature` | Kreativität, 0.0 bis 2.0 |
+| `prefix` | Zeichen vor dem Befehl, Standard `.` |
+| `trigger_delay_ms` | Pause nach dem Befehl in ms, 0 bis 5000, Standard 1000. Bei 0 löst der Befehl sofort aus. |
+| `key_delay` | ms zwischen simulierten Tastendrücken, 30 bis 500, Standard 200. Auf langsamen Rechnern erhöhen. |
+| `spinner` | `animated` (◐◓◑◒), `static` (`[Processing...]`) oder `off` |
 
 <br>
 
-## 🛠️ Custom Commands
+## 🛠️ Eigene Befehle
 
-Add your own commands in `commands.json`:
+Eigene Befehle legst du im Reiter „Befehle“ an oder direkt in `commands.json`:
 
 ```json
 [
-  { "trigger": "email", "type": "replacer-text", "value": "you@example.com" },
-  { "trigger": "sig", "type": "replacer-text", "value": "Best regards,\nYour Name" },
-  { "trigger": "uuid", "type": "replacer-shell", "value": "powershell -NoProfile -Command \"[guid]::NewGuid()\"" },
-  { "trigger": "eli5", "type": "ai", "prompt": "Explain this like I'm five years old." },
-  { "trigger": "bullet", "type": "ai", "prompt": "Convert this text into bullet points." }
+  { "trigger": "mail",   "type": "replacer-text",  "value": "du@example.com" },
+  { "trigger": "uuid",   "type": "replacer-shell", "value": "powershell -NoProfile -Command \"[guid]::NewGuid()\"" },
+  { "trigger": "punkte", "type": "ai",             "prompt": "Wandle den Text in eine Stichpunktliste um." }
 ]
 ```
 
-### Command Types
+| Typ | Wirkung | Braucht Key? |
+|:--|:--|:--|
+| `ai` | Sendet den Text mit deinem Prompt an die KI | je nach Anbieter |
+| `replacer-text` | Ersetzt den Befehl durch festen Text, offline | Nein |
+| `replacer-shell` | Führt einen Befehl aus und fügt die Ausgabe ein | Nein |
 
-| Type | How It Works | Needs API Key? | Latency |
-|:-----|:-------------|:---------------|:--------|
-| **`ai`** | Sends text to your AI provider with your custom prompt | Yes | ~1–3 seconds |
-| **`replacer-text`** | Replaces the trigger with a fixed string, entirely offline | No | Instant |
-| **`replacer-shell`** | Runs a shell command and replaces with its output | No | Instant |
+Reserviert sind `undo`, `copy`, `cut`, `paste`, `replace` und `translate`.
 
 > [!CAUTION]
-> **Shell commands run unsandboxed.** The `replacer-shell` type executes arbitrary commands with your user privileges. Never import `commands.json` files from untrusted sources — a malicious command could compromise your system the moment you type its trigger.
+> **Shell Befehle laufen ohne Sandbox** mit deinen Benutzerrechten. Übernimm nie eine `commands.json` aus unsicherer Quelle.
 
 <br>
 
-## 🔧 How It Works
+## 🔧 So funktioniert es
 
 ```mermaid
 flowchart TD
-    A["📝 You type: 'Hello wrld ?fix'"] --> B{"🔍 Raw Input API\ndetects trigger"}
-    B -- "Text Replacer" --> C["⚡ Instant local replacement\n(no network call)"]
-    B -- "AI Command" --> D["🔑 Selects next API key\n(round-robin)"]
-    D --> E["🤖 Sends text + prompt\nto AI provider"]
-    E --> F["⏳ Spinner appended to text\nhow r u ◐ ◓ ◑ ◒"]
-    F --> G["✅ Replaces text in-place"]
+    A["📝 Du tippst: 'Hallo Wlet .fix'"] --> B{"🔍 Raw Input erkennt<br/>Befehl mit Leerzeichen davor"}
+    B --> P["⏱️ Tipp Pause abwarten<br/>(Abbruch bei Weitertippen)"]
+    P -- "Text / Shell" --> C["⚡ Lokale Ersetzung"]
+    P -- "KI Befehl" --> D["🔑 Nächster Key<br/>(reihum)"]
+    D --> E["🤖 Text + Prompt<br/>an die Schnittstelle"]
+    E --> F["⏳ Spinner am Text<br/>◐ ◓ ◑ ◒"]
+    F --> G["✅ Text wird ersetzt"]
     C --> G
-
-    style A fill:#1a1a2e,stroke:#e94560,color:#fff
-    style B fill:#1a1a2e,stroke:#0f3460,color:#fff
-    style C fill:#1a1a2e,stroke:#00b894,color:#fff
-    style D fill:#1a1a2e,stroke:#0f3460,color:#fff
-    style E fill:#1a1a2e,stroke:#0f3460,color:#fff
-    style F fill:#1a1a2e,stroke:#e94560,color:#fff
-    style G fill:#16213e,stroke:#00b894,color:#fff
 ```
 
 <details>
-<summary>🔧 <strong>Technical deep-dive</strong></summary>
+<summary>🔧 <strong>Technische Details</strong></summary>
 
 <br>
 
-1. **Keystroke Capture** — Registers a hidden window with Windows Raw Input API to receive all keyboard events system-wide (same API class used by accessibility tools)
-2. **Fast Exit Optimization** — Checks if the last character matches any known trigger's last character before doing a full scan
-3. **Longest Match** — When a potential match is found, searches for the longest matching trigger at the end of the buffer
-4. **Buffer Safety** — Buffer clears automatically on window change, navigation keys, Enter, Escape, and Tab to prevent cross-app trigger collisions
-5. **Command Routing** — Text replacer commands execute immediately on-device. AI commands proceed to the API call path with retry logic
-6. **Key Rotation & Retry** — Rotates through available keys, skipping rate-limited or invalid ones. Retries on network errors and server failures
-7. **Inline Spinner** — While waiting for the AI response, the trigger is replaced with an animated spinner appended to your original text (e.g., `how r u ◐`) to show progress
-8. **Text Replacement** — Uses Ctrl+A / Ctrl+V via SendInput to replace field content
-9. **Clipboard Safety** — All clipboard operations use exclusion flags to prevent pollution of Windows clipboard history
-10. **Singleton Guard** — File lock prevents duplicate instances from running simultaneously
+1. **Tastaturerfassung:** Ein verstecktes Fenster empfängt Tastatureingaben über die Windows Raw Input API.
+2. **Erkennung:** Der längste passende Befehl am Ende des Puffers gewinnt. Davor muss ein Leerzeichen oder der Textanfang stehen.
+3. **Tipp Pause:** Ein Timer wartet `trigger_delay_ms`. Ändern sich Puffer, Fenster oder Fokus, wird abgebrochen. Vor dem Ersetzen wird der Feldinhalt noch einmal geprüft.
+4. **Puffer:** Er leert sich bei Fensterwechsel, Enter, Escape, Tab und Navigationstasten.
+5. **KI Aufruf:** Läuft in einem eigenen Thread, Aufrufe werden nacheinander abgearbeitet. Der Text wird in `<input>` eingefasst, `<think>` Blöcke und Markdown Zäune werden entfernt.
+6. **Ersetzen:** Strg+A und Strg+C lesen das Feld, Strg+V setzt das Ergebnis per SendInput ein.
+7. **Zwischenablage:** Geschriebene Daten werden für Verlauf und Cloud Sync ausgeschlossen, soweit Windows das beachtet.
+8. **Nur eine Instanz:** Eine Sperrdatei verhindert doppelte Starts.
 
 </details>
 
 <br>
 
-## 🐛 Debug Mode
+## 🐛 Fehlersuche
 
 ```powershell
-cd $env:USERPROFILE\.swiftslate
-python SwiftSlateJMKEdition.pyw --debug
+cd $env:LOCALAPPDATA\SwiftSlateJMKEdition\app
+..\venv\Scripts\python.exe SwiftSlateJMKEdition.pyw --debug
 ```
 
-If using the embedded runtime:
-
-```powershell
-cd $env:USERPROFILE\.swiftslate
-.\runtime\python.exe SwiftSlate.pyw --debug
-```
-
-This runs in the foreground with full logging — shows every keystroke match, API call, and error.
+Im Debug Modus läuft die App im Vordergrund und schreibt jede Erkennung, jeden API Aufruf und jeden Fehler in die Konsole und nach `debug.log`. Fehler beim Öffnen der Einstellungen landen auch ohne `--debug` in `debug.log` und erscheinen als Tray Meldung. Keys werden nie geloggt.
 
 <br>
 
-## 🔒 Privacy & Security
+## 🔒 Datenschutz und Sicherheit
 
-| | Concern | How SwiftSlate Desktop Handles It |
-|:--|:--------|:------------------------|
-| 👁️ | **Text Monitoring** | Raw Input transiently inspects a bounded keystroke suffix to detect configured triggers. Non-trigger text is not logged, persisted, or transmitted. |
-| 📡 | **Data Transmission** | AI-command text is sent only to the configured AI provider (Google Gemini, Groq, or your custom endpoint). No user text or API keys are sent to other servers. A bare TCP connect to public DNS on port 443 checks connectivity after a network error; `?ip` separately contacts ifconfig.me to look up your public IP. |
-| 🔐 | **API Key Storage** | API keys are stored locally in `config.json` so the app can use your configured provider. Setup prompts use secure string input to avoid terminal history leaks. Protect your Windows account and do not share this file. |
-| 📊 | **Analytics** | **None.** Zero telemetry, zero tracking, zero crash reporting. |
-| 📖 | **Open Source** | The entire codebase is open for inspection under the MIT License. |
-| 🔑 | **Permissions** | Runs as a standard user process — no admin/elevated privileges required. |
-| 📋 | **Clipboard Safety** | SwiftSlate marks clipboard data it writes to avoid history/cloud sync where Windows honors those flags. Reading an active field requires Windows copy/paste automation, so sensitive fields may still be handled by the target app's normal clipboard path. |
-| ✅ | **Installer Integrity** | `install.ps1` pins the SHA-256 of `SwiftSlate.pyw`, `commands.json`, and the embedded Python runtime; CI fails the build if an app-file pin goes stale. Files are downloaded from GitHub raw first (no caching) with a jsDelivr CDN fallback; a hash mismatch is rejected rather than installed. |
+| | Thema | Umsetzung |
+|:--|:--|:--|
+| 👁️ | **Texterfassung** | Nur ein kurzer Puffer am Ende der Eingabe wird auf Befehle geprüft. Anderer Text wird weder gespeichert noch gesendet. |
+| 📡 | **Datenübertragung** | Text eines KI Befehls geht nur an die eingestellte Schnittstelle. Nach einem Netzwerkfehler prüft ein reiner TCP Verbindungsaufbau zu 1.1.1.1 bzw. 8.8.8.8 (Port 443) die Verbindung. |
+| 🔐 | **API Keys** | Liegen lokal in `config.json`, die der Installer nur für deinen Benutzer lesbar macht. Im Fenster werden Keys nie im Klartext angezeigt, in Meldungen nie Teile davon. |
+| 📊 | **Analyse** | Keine. Keine Telemetrie, kein Tracking. |
+| 🔑 | **Rechte** | Läuft als normaler Benutzerprozess, ohne Adminrechte. |
+| ✅ | **Installer** | Fester Release Tag, SHA256 Pins für jede Datei, kein `irm \| iex`. CI prüft, dass die Pins zum Code passen. |
 
 <br>
 
-## 🏗️ Tech Stack
+## 🏗️ Technik
 
 <table>
-<tr><td><strong>Language</strong></td><td>Python (runs on 3.10+)</td></tr>
-<tr><td><strong>Input Capture</strong></td><td>Windows Raw Input API</td></tr>
-<tr><td><strong>Key Simulation</strong></td><td>SendInput (KEYBDINPUT)</td></tr>
-<tr><td><strong>Message Loop</strong></td><td>GetMessageW (blocking, zero CPU when idle)</td></tr>
-<tr><td><strong>HTTP</strong></td><td><code>urllib</code> (zero external dependencies)</td></tr>
-<tr><td><strong>JSON</strong></td><td><code>json</code> (stdlib)</td></tr>
-<tr><td><strong>Concurrency</strong></td><td><code>threading</code> (API calls run off main thread)</td></tr>
-<tr><td><strong>Config Watch</strong></td><td>Polling mtime every 2 seconds (hot reload)</td></tr>
+<tr><td><strong>Sprache</strong></td><td>Python 3.10+, eine einzige Datei <code>SwiftSlateJMKEdition.pyw</code></td></tr>
+<tr><td><strong>Abhängigkeiten</strong></td><td>Nur Standardbibliothek (<code>ctypes</code>, <code>urllib</code>, <code>json</code>, <code>threading</code>, <code>tkinter</code>)</td></tr>
+<tr><td><strong>Eingabe</strong></td><td>Windows Raw Input API</td></tr>
+<tr><td><strong>Tastensimulation</strong></td><td>SendInput</td></tr>
+<tr><td><strong>Oberfläche</strong></td><td>Tray Icon (Shell_NotifyIcon), Einstellungsfenster mit tkinter</td></tr>
+<tr><td><strong>Hot Reload</strong></td><td>Prüft die Änderungszeit der Dateien alle 2 Sekunden</td></tr>
 </table>
 
-> **Zero third-party dependencies** — uses only Python standard library and Windows APIs via ctypes.
->
-> The installer's embedded runtime has `site` disabled, so SwiftSlate must stay pip-free.
+<br>
+
+## ⚠️ Bekannte Grenzen
+
+- **Ersetzen per Strg+A / Strg+V:** Klappt in den meisten Textfeldern. In Apps mit eigener Eingabe (manche Terminals, Spiele Overlays) kann es scheitern.
+- **Einzeiliger Puffer:** Der Befehl muss ohne Unterbrechung im selben Feld getippt werden.
+- **Nur Windows:** Windows 10/11 ist nötig.
 
 <br>
 
-## 🔨 Building from Source
+## 🤝 Mitmachen
 
-### Prerequisites
-
-- **Windows 10/11** (64-bit)
-- **Python 3.10+** (or use the embedded runtime from the installer)
-
-### Run
+Siehe [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```powershell
-# Clone the repository
-git clone https://github.com/Musheer360/SwiftSlate-Desktop.git
-cd SwiftSlate-Desktop
-
-# Run in debug mode
-python SwiftSlateJMKEdition.pyw --debug
-```
-
-### Verify Syntax
-
-```powershell
-python -c "import py_compile; py_compile.compile('SwiftSlateJMKEdition.pyw', doraise=True)"
-```
-
-> [!NOTE]
-> The entire app is a single `SwiftSlateJMKEdition.pyw` file with zero pip dependencies. No build step required.
-
-<br>
-
-## ⚠️ Known Limitations
-
-- **Text replacement uses Ctrl+A → Ctrl+V** — this selects all and pastes, which works in most standard text fields. In apps with non-standard input handling (e.g., some terminal emulators, certain game overlays), replacement may not work as expected.
-- **Single-line buffer** — SwiftSlate tracks keystrokes in a buffer that clears on window switch, Enter, Escape, and Tab. Triggers must be typed in a single uninterrupted sequence within the same field.
-- **Windows only** — currently requires Windows 10/11. Linux support is planned.
-
-<br>
-
-## 🤝 Contributing
-
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for full details.
-
-```bash
-# 1. Fork the repository, then:
-git clone https://github.com/YOUR_USERNAME/SwiftSlateJMKEdition.git
+git clone https://github.com/codingismynewgaming/SwiftSlateJMKEdition.git
 cd SwiftSlateJMKEdition
-
-# 2. Create a feature branch
-git checkout -b feature/amazing-feature
-
-# 3. Make your changes and test
+git config core.hooksPath .githooks     # hält die SHA256 Pins im Installer aktuell
 python SwiftSlateJMKEdition.pyw --debug
-
-# 4. Verify syntax
-python -c "import py_compile; py_compile.compile('SwiftSlateJMKEdition.pyw', doraise=True)"
-
-# 5. Push and open a Pull Request
-git push origin feature/amazing-feature
+python -m unittest discover -s tests -v
 ```
 
-### Ideas for Contributions
-
-- 🐧 Linux support (porting keystroke detection and text replacement)
-- 🧩 New built-in commands
-- 🤖 Additional AI provider integrations
-- 🐛 Bug fixes for text replacement edge cases
-- 📖 Documentation improvements
+Fehler und Ideen bitte als [Issue](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/issues) melden.
 
 <br>
 
-## ❤️ Support the Project
+## 📄 Lizenz und Dank
 
-SwiftSlate Desktop is free, open source, and built in my spare time. If it's useful to you, consider supporting its development:
+MIT Lizenz, siehe [LICENSE](LICENSE). Das Copyright des Originals bleibt bei Musheer Alam.
 
-- ⭐ **Star this repo** — it helps others discover SwiftSlate
-- 💖 [**Sponsor on GitHub**](https://github.com/sponsors/Musheer360) — even a small contribution keeps the project going
-
-<br>
-
-## 📄 License
-
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+Ein großes Dankeschön an [**Musheer Alam (Musheer360)**](https://github.com/Musheer360), den Autor des Originals [SwiftSlate-Desktop](https://github.com/Musheer360/SwiftSlate-Desktop) aus der [SwiftSlate](https://github.com/Musheer360/SwiftSlate) Familie. Wer seine Arbeit unterstützen möchte: [GitHub Sponsors](https://github.com/sponsors/Musheer360).
 
 <br>
-
----
 
 <div align="center">
 
-<br>
-
-Part of the [**SwiftSlate**](https://github.com/Musheer360/SwiftSlate) family.
-
-Made with ❤️ by [**Musheer Alam**](https://github.com/Musheer360)
-
-If SwiftSlate makes your typing life easier, consider giving it a ⭐
-
-<br>
+SwiftSlateJMKEdition, ein Fork mit ❤️ für deutsche Texte
 
 </div>
