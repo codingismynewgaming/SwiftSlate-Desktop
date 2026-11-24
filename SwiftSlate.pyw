@@ -226,6 +226,7 @@ model = ""
 prefix = "?"
 processing = False
 abort_event = threading.Event()  # Set when user types during processing — aborts spinner
+_api_call_lock = threading.Lock()  # Serialize API calls to prevent parallel 429 bursts
 last_original_text = None
 internal_clipboard = None
 spinner_frames = "\u25D0\u25D3\u25D1\u25D2"
@@ -969,6 +970,33 @@ class ApiResponseError(Exception):
     which was untrue and pointed at the one thing that was working.
     """
 
+class EmptyApiResponseError(ApiResponseError):
+    """Raised when the model returned empty content (retried once with the same key)."""
+
+def strip_think_block(text: str) -> str:
+    """Remove a leading <think>...</think> reasoning block if present."""
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"^\s*<think>.*?</think>\s*", "", text, count=1, flags=re.DOTALL | re.IGNORECASE)
+
+def extract_openai_content(choice):
+    """Extract assistant text from an OpenAI-compatible choice dict.
+    Returns (text, reason) — one will be None."""
+    if not isinstance(choice, dict):
+        return None, "Leere Antwort vom Modell."
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return None, "Leere Antwort vom Modell."
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip(), None
+    if choice.get("finish_reason") == "length":
+        return None, "Antwort abgeschnitten (Token Limit). Kürzeren Text oder anderes Modell versuchen."
+    reasoning = message.get("reasoning_content") or message.get("reasoning")
+    if isinstance(reasoning, str) and reasoning.strip():
+        return None, "Modell lieferte nur Denktext, keine Antwort. Anderes Modell wählen oder erneut versuchen."
+    return None, "Leere Antwort vom Modell."
+
 def _finite(value):
     """True if `value` is a real, finite number. Guards against Infinity/NaN (which json.load
     accepts) and oversized int literals reaching float()/int(), which raise."""
@@ -1057,8 +1085,12 @@ def is_model_refusal(text: str) -> bool:
 
 def call_api(text, prompt):
     """Call API with key rotation and retry on transient errors.
-    On network/timeout failures, checks connectivity first before retrying.
+    Serialized via _api_call_lock so concurrent triggers cannot burst 429s.
     Returns (result_text, error_reason) — one will be None."""
+    with _api_call_lock:
+        return _call_api_locked(text, prompt)
+
+def _call_api_locked(text, prompt):
     system_content = SYSTEM_PROMPT_PREFIX + prompt
     # One attempt per configured key, matching Android's CommandRunner: get_next_key
     # already skips keys that are benched (rate-limited/invalid) or already tried in
@@ -1079,140 +1111,175 @@ def call_api(text, prompt):
                     failure_reason = f"All {len(tried_keys)} API keys were rejected by the provider. Check your keys in config.json."
                 elif tried_keys:
                     last_tried = list(tried_keys)[-1]
-                    hint = f"••••{last_tried[-4:]}" if len(last_tried) >= 4 else "key"
-                    failure_reason = f"API key was rejected by the provider ({hint}). Check your key in config.json."
+                    key_idx = (api_keys.index(last_tried) + 1) if last_tried in api_keys else 1
+                    failure_reason = f"Ein API Key wurde abgelehnt (Key Nr. {key_idx} von {len(api_keys)})."
                 else:
                     failure_reason = ("All API keys were rejected by the provider. Check your keys, and "
                                       f"that '{model}' is available to them.")
             elif any(time.time() <= _rate_limited_keys.get(k, 0) for k in api_keys):
-                failure_reason = "All API keys are rate limited. Wait a moment and try again."
+                failure_reason = "Anbieter ist gerade ausgelastet (429). Kurz warten und erneut auslösen."
             elif not failure_reason:
                 failure_reason = "No API key was available for this request."
             break
 
         tried_keys.add(key)
-        try:
-            if provider == "gemini":
-                result = _call_gemini(text, system_content, key)
-            else:
-                endpoint = custom_endpoint if provider == "custom" else "https://api.groq.com/openai/v1"
-                result = _call_openai_compatible(text, system_content, key, endpoint)
+        empty_retried = False
+        rate_limit_retries = 0
+        abort_requested = False
+        fail_fast = False
 
-            if result is not None:
-                return result, None
-
-        except ApiResponseError as e:
-            # 200 OK but unusable body or in-band refusal. Another key cannot fix it.
-            last_error = e
-            failure_reason = str(e)
-            log(f"Attempt {attempt+1}/{max_attempts}: unusable response - {e}")
-            break
-
-        except urllib.error.HTTPError as e:
-            err_type = classify_error(e, e.code)
-            last_error = e
-            log(f"Attempt {attempt+1}/{max_attempts}: HTTP {e.code} ({err_type})")
-
-            # 413 = per-minute token budget limit exceeded. Fail fast without key rotation
-            if e.code == 413:
-                log("Request too large for per-minute token limit — failing fast")
-                failure_reason = ("Text is too long for this model's per-minute token limit. "
-                                  "Select less text and try again.")
-                break
-
-            err_body = ""
+        while True:
             try:
-                err_body = e.read(65_537).decode("utf-8", "replace")[:65_536]
-            except Exception as read_err:
-                log(f"Failed to read error body: {read_err}")
-            err_code, err_msg = _parse_api_error(err_body)
-            detail = err_msg or err_body[:200]
-
-            # Gemini reports an invalid API key as HTTP 400 (reason API_KEY_INVALID), not 401/403.
-            if e.code in (400, 422) and (
-                    "api_key_invalid" in (err_code or "").lower()
-                    or "api_key_invalid" in detail.lower()
-                    or "api key not valid" in detail.lower()):
-                mark_key_invalid(key)
-                if len(api_keys) > 1:
-                    hint = f"••••{key[-4:]}" if len(key) >= 4 else "key"
-                    failure_reason = f"Invalid API key ({hint}). Check your keys in config.json."
+                if provider == "gemini":
+                    result = _call_gemini(text, system_content, key)
                 else:
-                    failure_reason = "Invalid API key. Check your key in config.json."
-                continue
+                    endpoint = custom_endpoint if provider == "custom" else "https://api.groq.com/openai/v1"
+                    result = _call_openai_compatible(text, system_content, key, endpoint)
 
-            if e.code in (400, 422):
-                if err_code == "json_validate_failed" or "failed to validate json" in detail.lower() or "failed_generation" in detail.lower() or "response_format" in detail.lower():
-                    failure_reason = "Response blocked by safety filters. Try rephrasing."
-                else:
-                    failure_reason = "Request failed. Check your settings in config.json."
+                if result is not None:
+                    return result, None
+
+            except EmptyApiResponseError as e:
+                last_error = e
+                failure_reason = str(e)
+                log(f"Attempt {attempt+1}/{max_attempts}: empty response - {e}")
+                if not empty_retried:
+                    empty_retried = True
+                    log("Empty response — waiting 1s before retry")
+                    if abort_event.wait(timeout=1.0):
+                        log("Empty-response wait aborted by user typing")
+                        failure_reason = "Abgebrochen."
+                        abort_requested = True
+                        break
+                    continue
+                fail_fast = True
                 break
 
-            if err_type == ERR_RATE_LIMIT:
-                retry_after = 60
-                try:
-                    ra = e.headers.get("Retry-After")
-                    if ra and ra.isdigit():
-                        retry_after = int(ra)
-                except Exception as parse_err:
-                    log(f"Failed to parse Retry-After header: {parse_err}")
-                report_rate_limit(key, retry_after)
-                failure_reason = "All API keys are rate limited. Wait a moment and try again."
-                continue  # Try next key
+            except ApiResponseError as e:
+                # 200 OK but unusable body or in-band refusal. Another key cannot fix it.
+                last_error = e
+                failure_reason = str(e)
+                log(f"Attempt {attempt+1}/{max_attempts}: unusable response - {e}")
+                fail_fast = True
+                break
 
-            elif err_type == ERR_INVALID_KEY:
-                mark_key_invalid(key)
-                if len(api_keys) > 1:
-                    hint = f"••••{key[-4:]}" if len(key) >= 4 else "key"
-                    failure_reason = f"Invalid API key ({hint}). Check your keys in config.json."
-                else:
-                    failure_reason = (f"API key rejected. Check your keys, and that "
-                                      f"'{model}' is available to them.")
-                continue  # Try next key
+            except urllib.error.HTTPError as e:
+                err_type = classify_error(e, e.code)
+                last_error = e
+                log(f"Attempt {attempt+1}/{max_attempts}: HTTP {e.code} ({err_type})")
 
-            elif err_type == ERR_SERVER:
-                failure_reason = "Server error. Could not reach the API."
-                continue  # 5xx — try next key
-
-            else:
-                if e.code == 404 or err_code == "model_not_found":
-                    failure_reason = (f"Model '{model}' not found or not available to this key. "
-                                      f"Check the model in config.json.")
-                else:
-                    failure_reason = "Request failed. Check your settings in config.json."
-                break  # Non-retryable (400, etc.)
-
-        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
-            last_error = e
-            err_type = classify_error(e)
-            log(f"Attempt {attempt+1}/{max_attempts}: {err_type} - {e}")
-
-            if err_type == ERR_NETWORK:
-                # Network failed — check if internet is even reachable. Distinguishing "no
-                # internet at all" from "provider unreachable but internet is fine" avoids
-                # burning through every configured key on a dead connection and gives a
-                # much clearer error than "provider unreachable" repeated per key.
-                log("Network error — checking connectivity...")
-                if not _check_network():
-                    log("No internet — aborting retries")
-                    failure_reason = "No internet connection."
+                # 413 = per-minute token budget limit exceeded. Fail fast without key rotation
+                if e.code == 413:
+                    log("Request too large for per-minute token limit — failing fast")
+                    failure_reason = ("Text is too long for this model's per-minute token limit. "
+                                      "Select less text and try again.")
+                    fail_fast = True
                     break
-                # Network is fine — problem is provider-side, try next key
-                log("Network OK — retrying with next key")
-                # README-documented behavior: wait 1s before retrying — transient blips
-                # (DNS hiccups, Wi-Fi roam) usually clear within a second, and the pause
-                # avoids hammering the provider with an immediate re-request.
-                time.sleep(1)
-                failure_reason = f"Provider unreachable ({type(e).__name__})."
-                continue
-            else:
-                failure_reason = f"Network error: {type(e).__name__}."
+
+                err_body = ""
+                try:
+                    err_body = e.read(65_537).decode("utf-8", "replace")[:65_536]
+                except Exception as read_err:
+                    log(f"Failed to read error body: {read_err}")
+                err_code, err_msg = _parse_api_error(err_body)
+                detail = err_msg or err_body[:200]
+
+                # Gemini reports an invalid API key as HTTP 400 (reason API_KEY_INVALID), not 401/403.
+                if e.code in (400, 422) and (
+                        "api_key_invalid" in (err_code or "").lower()
+                        or "api_key_invalid" in detail.lower()
+                        or "api key not valid" in detail.lower()):
+                    mark_key_invalid(key)
+                    key_idx = (api_keys.index(key) + 1) if key in api_keys else (attempt + 1)
+                    failure_reason = f"Ein API Key wurde abgelehnt (Key Nr. {key_idx} von {len(api_keys)})."
+                    break
+
+                if e.code in (400, 422):
+                    if err_code == "json_validate_failed" or "failed to validate json" in detail.lower() or "failed_generation" in detail.lower() or "response_format" in detail.lower():
+                        failure_reason = "Response blocked by safety filters. Try rephrasing."
+                    else:
+                        failure_reason = "Request failed. Check your settings in config.json."
+                    fail_fast = True
+                    break
+
+                if err_type == ERR_RATE_LIMIT:
+                    parsed_ra = None
+                    try:
+                        ra = e.headers.get("Retry-After")
+                        if ra and ra.strip().isdigit():
+                            parsed_ra = int(ra.strip())
+                    except Exception as parse_err:
+                        log(f"Failed to parse Retry-After header: {parse_err}")
+
+                    if rate_limit_retries < 2:
+                        rate_limit_retries += 1
+                        if parsed_ra is not None:
+                            wait_secs = max(1, min(parsed_ra, 10))
+                        else:
+                            wait_secs = 2 if rate_limit_retries == 1 else 4
+                        log(f"Attempt {attempt+1}/{max_attempts}: HTTP 429 retry {rate_limit_retries}/2, waiting {wait_secs}s")
+                        if abort_event.wait(timeout=wait_secs):
+                            log("Rate-limit wait aborted by user typing")
+                            failure_reason = "Abgebrochen."
+                            abort_requested = True
+                            break
+                        continue
+
+                    cooldown = parsed_ra if parsed_ra is not None else 60
+                    if len(api_keys) <= 1:
+                        cooldown = min(cooldown, 15)
+                    report_rate_limit(key, cooldown)
+                    failure_reason = "Anbieter ist gerade ausgelastet (429). Kurz warten und erneut auslösen."
+                    break  # Try next key
+
+                elif err_type == ERR_INVALID_KEY:
+                    mark_key_invalid(key)
+                    key_idx = (api_keys.index(key) + 1) if key in api_keys else (attempt + 1)
+                    failure_reason = f"Ein API Key wurde abgelehnt (Key Nr. {key_idx} von {len(api_keys)})."
+                    break  # Try next key
+
+                elif err_type == ERR_SERVER:
+                    failure_reason = "Server error. Could not reach the API."
+                    break  # 5xx — try next key
+
+                else:
+                    if e.code == 404 or err_code == "model_not_found":
+                        failure_reason = (f"Model '{model}' not found or not available to this key. "
+                                          f"Check the model in config.json.")
+                    else:
+                        failure_reason = "Request failed. Check your settings in config.json."
+                    fail_fast = True
+                    break  # Non-retryable (400, etc.)
+
+            except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
+                last_error = e
+                err_type = classify_error(e)
+                log(f"Attempt {attempt+1}/{max_attempts}: {err_type} - {e}")
+
+                if err_type == ERR_NETWORK:
+                    log("Network error — checking connectivity...")
+                    if not _check_network():
+                        log("No internet — aborting retries")
+                        failure_reason = "No internet connection."
+                        fail_fast = True
+                        break
+                    log("Network OK — retrying with next key")
+                    time.sleep(1)
+                    failure_reason = f"Provider unreachable ({type(e).__name__})."
+                    break
+                else:
+                    failure_reason = f"Network error: {type(e).__name__}."
+                    fail_fast = True
+                    break
+
+            except Exception as e:
+                last_error = e
+                log(f"Attempt {attempt+1}/{max_attempts}: unexpected - {e}")
+                failure_reason = f"Unexpected error: {type(e).__name__}."
+                fail_fast = True
                 break
 
-        except Exception as e:
-            last_error = e
-            log(f"Attempt {attempt+1}/{max_attempts}: unexpected - {e}")
-            failure_reason = f"Unexpected error: {type(e).__name__}."
+        if abort_requested or fail_fast:
             break
 
     # Determine final failure reason if not already set
@@ -1357,17 +1424,16 @@ def _call_openai_compatible(text, system_content, key, endpoint):
         if not isinstance(data, dict):
             raise ApiResponseError("Provider returned an unexpected response. Try again.")
         try:
-            # Some OpenAI-compatible providers return "content": null (notably when a
-            # content filter fires). None.strip() raises AttributeError, which was not
-            # in the except tuple and escaped as an unhandled "Unexpected error".
             choice = data["choices"][0]
             if choice.get("finish_reason") == "content_filter":
                 raise ApiResponseError("Response blocked by the provider's content filter. Try rephrasing.")
-            content = choice["message"].get("content")
-            result = (content or "").strip()
-            if not result:
-                raise ApiResponseError("Model returned an empty response. Try again.")
-            cleaned = strip_markdown_fences(result)
+            extracted, reason = extract_openai_content(choice)
+            if extracted is None:
+                raise EmptyApiResponseError(reason)
+            without_think = strip_think_block(extracted).strip()
+            if not without_think:
+                raise EmptyApiResponseError("Leere Antwort vom Modell.")
+            cleaned = strip_markdown_fences(without_think)
             if is_model_refusal(cleaned):
                 raise ApiResponseError("Response blocked by safety filters. Try rephrasing.")
             return cleaned
