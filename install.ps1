@@ -24,7 +24,7 @@ $pyTag = (($pythonVersion -split '\.')[0] + ($pythonVersion -split '\.')[1])
 # verified at install time and by CI (URL reachability); bump it whenever $pythonVersion
 # changes. Recompute with: sha256sum <file>  (or `Get-FileHash -Algorithm SHA256` on Windows)
 $hashes = @{
-    "SwiftSlate.pyw" = "49DD08C427E6894B963479AE01374FE39DAB5C66C71DCB08DB5F304ABB983DC4"
+    "SwiftSlate.pyw" = "232D7BAA530E525743E101CDE9D1FEF791AAA6E5E40902D984920AFAFE516238"
     "commands.json"  = "CE38B3C4B48B56BA40B8BD23C58AE873C3B29D78BD8319FA96CEBB923A478E9A"
     "python.zip"     = "D1F04D990AEE1253D8569E8E5104E30FA9F5FA830899F14843448872D936A2CF"
 }

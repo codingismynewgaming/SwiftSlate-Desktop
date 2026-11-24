@@ -57,6 +57,8 @@ WM_RBUTTONUP = 0x0205
 TPM_RETURNCMD = 0x0100
 TPM_RIGHTBUTTON = 0x0002
 MF_STRING = 0x0000
+MF_SEPARATOR = 0x0800
+MENU_ID_SETTINGS = 1001
 MENU_ID_EXIT = 1002
 
 # --- Win32 API ---
@@ -341,6 +343,80 @@ def parse_trigger_delay(value) -> int:
     if not math.isfinite(fval):
         return 1000
     return max(0, min(5000, int(fval)))
+
+def write_json_atomic(path, data):
+    """Write JSON data atomically to `path` via a temp file in the same directory."""
+    target = os.path.abspath(path)
+    parent = os.path.dirname(target) or "."
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=parent, delete=False, suffix=".tmp"
+        ) as f:
+            tmp_path = f.name
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target)
+        tmp_path = None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+def validate_settings(values) -> list[str]:
+    """Validate general settings dict and return a list of German error messages (empty = OK)."""
+    errors = []
+    prov = values.get("provider", "")
+    if prov not in ("custom", "gemini", "groq"):
+        errors.append("Ungültiger Anbieter.")
+
+    if prov == "custom":
+        ep = values.get("endpoint", "")
+        if not isinstance(ep, str) or not ep.strip().startswith(("http://", "https://")):
+            errors.append("Endpoint muss mit http:// oder https:// beginnen.")
+        else:
+            parsed = urllib.parse.urlparse(ep.strip())
+            if not parsed.netloc:
+                errors.append("Endpoint muss eine gültige Adresse enthalten.")
+
+    mdl = values.get("model", "")
+    if not isinstance(mdl, str) or not mdl.strip():
+        errors.append("Modell darf nicht leer sein.")
+
+    temp = values.get("temperature")
+    temp_ok = False
+    if not isinstance(temp, bool):
+        try:
+            tval = float(temp)
+            if math.isfinite(tval) and 0.0 <= tval <= 2.0:
+                temp_ok = True
+        except (TypeError, ValueError, OverflowError):
+            pass
+    if not temp_ok:
+        errors.append("Temperatur muss zwischen 0.0 und 2.0 liegen.")
+
+    pref = values.get("prefix", "")
+    if (not isinstance(pref, str) or not (1 <= len(pref) <= 3)
+            or any(c.isspace() or c.isalnum() for c in pref)):
+        errors.append("Präfix muss 1 bis 3 Zeichen lang sein (ohne Leerzeichen, Buchstaben oder Ziffern).")
+
+    delay = values.get("trigger_delay_ms")
+    delay_ok = False
+    if not isinstance(delay, bool):
+        try:
+            dval = float(delay)
+            if math.isfinite(dval) and float(int(dval)) == dval and 0 <= int(dval) <= 5000:
+                delay_ok = True
+        except (TypeError, ValueError, OverflowError):
+            pass
+    if not delay_ok:
+        errors.append("Tipp-Pause muss eine ganze Zahl zwischen 0 und 5000 ms sein.")
+
+    return errors
 
 def strip_markdown_fences(text):
     """Strip markdown code fences from API response if present.
@@ -2532,6 +2608,309 @@ def _process_keystroke_inner(vkey, scan_code):
             last_typed_vkey_time = time.time()
             handle_trigger(best_trigger)
 
+_settings_proc = None
+
+def _open_settings_window():
+    """Launch the tkinter settings window in a separate process (if not already open)."""
+    global _settings_proc
+    if _settings_proc is not None and _settings_proc.poll() is None:
+        return
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        _settings_proc = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--settings"],
+            cwd=script_dir,
+            creationflags=flags,
+        )
+    except Exception as e:
+        log(f"Failed to open settings window: {e}")
+
+def _get_startup_shortcut_path():
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        return ""
+    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "SwiftSlate.lnk")
+
+def _set_autostart(enabled):
+    lnk_path = _get_startup_shortcut_path()
+    if not lnk_path:
+        raise RuntimeError("APPDATA-Pfad nicht gefunden.")
+    if not enabled:
+        if os.path.exists(lnk_path):
+            os.unlink(lnk_path)
+        return
+    os.makedirs(os.path.dirname(lnk_path), exist_ok=True)
+    py_dir = os.path.dirname(os.path.abspath(sys.executable))
+    pythonw = os.path.join(py_dir, "pythonw.exe")
+    target = pythonw if os.path.isfile(pythonw) else os.path.abspath(sys.executable)
+    script_path = os.path.abspath(__file__)
+    env = os.environ.copy()
+    env["SWIFTSLATE_LNK"] = lnk_path
+    env["SWIFTSLATE_TARGET"] = target
+    env["SWIFTSLATE_ARGS"] = f'"{script_path}"'
+    env["SWIFTSLATE_WORKDIR"] = script_dir
+    ps_cmd = (
+        '$ws = New-Object -ComObject WScript.Shell; '
+        '$s = $ws.CreateShortcut($env:SWIFTSLATE_LNK); '
+        '$s.TargetPath = $env:SWIFTSLATE_TARGET; '
+        '$s.Arguments = $env:SWIFTSLATE_ARGS; '
+        '$s.WorkingDirectory = $env:SWIFTSLATE_WORKDIR; '
+        '$s.Save()'
+    )
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_cmd],
+        check=True,
+        env=env,
+        creationflags=flags,
+    )
+
+def run_settings_window():
+    """Run the standalone tkinter settings window (--settings)."""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox, ttk
+    except ImportError:
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "Für das Einstellungsfenster fehlt tkinter. Bitte Python von python.org mit Tcl/Tk installieren.",
+            "SwiftSlate",
+            0x10,
+        )
+        return
+
+    config_path = os.path.join(script_dir, "config.json")
+
+    def _read_config_file():
+        if os.path.isfile(config_path):
+            try:
+                with open(config_path, encoding="utf-8-sig") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    return loaded
+            except Exception:
+                pass
+        return {}
+
+    raw_cfg = _read_config_file()
+    stored_keys = list(raw_cfg.get("api_keys") or []) if isinstance(raw_cfg.get("api_keys"), list) else []
+
+    root = tk.Tk()
+    root.title("SwiftSlate – Einstellungen")
+    root.resizable(True, False)
+    try:
+        root.iconbitmap(os.path.join(script_dir, "assets", "icon.ico"))
+    except Exception:
+        pass
+
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+
+    general_frame = ttk.Frame(notebook, padding=12)
+    notebook.add(general_frame, text="Allgemein")
+    general_frame.columnconfigure(1, weight=1)
+
+    provider_labels = [
+        ("OpenAI kompatible Schnittstelle", "custom"),
+        ("Google Gemini", "gemini"),
+        ("Groq", "groq"),
+    ]
+    label_to_prov = dict(provider_labels)
+    prov_to_label = {v: k for k, v in provider_labels}
+
+    init_prov = raw_cfg.get("provider", "custom")
+    if init_prov not in prov_to_label:
+        init_prov = "custom"
+    init_endpoint = raw_cfg.get("endpoint", "") if isinstance(raw_cfg.get("endpoint"), str) else ""
+    init_model = raw_cfg.get("model", "") if isinstance(raw_cfg.get("model"), str) else ""
+    init_temp = str(raw_cfg.get("temperature", 0.3))
+    init_prefix = raw_cfg.get("prefix", ".") if isinstance(raw_cfg.get("prefix"), str) else "."
+    init_delay = str(parse_trigger_delay(raw_cfg.get("trigger_delay_ms", 1000)))
+    lnk_path = _get_startup_shortcut_path()
+    init_autostart = bool(lnk_path and os.path.exists(lnk_path))
+
+    prov_var = tk.StringVar(value=prov_to_label[init_prov])
+    endpoint_var = tk.StringVar(value=init_endpoint)
+    model_var = tk.StringVar(value=init_model)
+    new_key_var = tk.StringVar(value="")
+    temp_var = tk.StringVar(value=init_temp)
+    prefix_var = tk.StringVar(value=init_prefix)
+    delay_var = tk.StringVar(value=init_delay)
+    autostart_var = tk.BooleanVar(value=init_autostart)
+
+    row = 0
+    ttk.Label(general_frame, text="Anbieter:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    prov_combo = ttk.Combobox(
+        general_frame,
+        textvariable=prov_var,
+        values=[lbl for lbl, _ in provider_labels],
+        state="readonly",
+    )
+    prov_combo.grid(row=row, column=1, sticky="ew", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="Endpoint:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    endpoint_entry = ttk.Entry(general_frame, textvariable=endpoint_var, width=42)
+    endpoint_entry.grid(row=row, column=1, sticky="ew", pady=4)
+
+    row += 1
+    endpoint_warn_var = tk.StringVar(value="")
+    endpoint_warn_lbl = ttk.Label(general_frame, textvariable=endpoint_warn_var, foreground="#b45309")
+    endpoint_warn_lbl.grid(row=row, column=1, sticky="w")
+
+    row += 1
+    ttk.Label(general_frame, text="Modell:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=model_var, width=42).grid(row=row, column=1, sticky="ew", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="API Key:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    key_status_frame = ttk.Frame(general_frame)
+    key_status_frame.grid(row=row, column=1, sticky="ew", pady=4)
+    key_status_var = tk.StringVar()
+
+    def _refresh_key_status():
+        if stored_keys:
+            key_status_var.set(f"Gespeichert: {len(stored_keys)} Key(s)")
+        else:
+            key_status_var.set("Kein Key gespeichert")
+
+    _refresh_key_status()
+    ttk.Label(key_status_frame, textvariable=key_status_var).pack(side="left")
+
+    keys_cleared = [False]
+
+    def _clear_keys():
+        if not stored_keys:
+            return
+        if messagebox.askyesno("Keys entfernen", "Alle gespeicherten API Keys wirklich entfernen?", parent=root):
+            stored_keys.clear()
+            keys_cleared[0] = True
+            _refresh_key_status()
+
+    ttk.Button(key_status_frame, text="Keys entfernen", command=_clear_keys).pack(side="right")
+
+    row += 1
+    ttk.Label(general_frame, text="Neuer Key:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=new_key_var, show="\u2022", width=42).grid(row=row, column=1, sticky="ew", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="Temperatur (0.0 – 2.0):").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=temp_var, width=12).grid(row=row, column=1, sticky="w", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="Präfix:").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=prefix_var, width=12).grid(row=row, column=1, sticky="w", pady=4)
+
+    row += 1
+    ttk.Label(general_frame, text="Tipp-Pause (ms, 0–5000):").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    ttk.Entry(general_frame, textvariable=delay_var, width=12).grid(row=row, column=1, sticky="w", pady=4)
+
+    row += 1
+    ttk.Checkbutton(
+        general_frame,
+        text="Mit Windows starten (Autostart)",
+        variable=autostart_var,
+    ).grid(row=row, column=1, sticky="w", pady=6)
+
+    def _update_endpoint_state(*_args):
+        prov_code = label_to_prov.get(prov_var.get(), "custom")
+        if prov_code == "custom":
+            endpoint_entry.configure(state="normal")
+            ep = endpoint_var.get().strip().lower()
+            if ep.startswith("http://") and not ep.startswith(("http://localhost", "http://127.0.0.1")):
+                endpoint_warn_var.set("Hinweis: Unverschlüsselte http://-Verbindung (nur lokal empfohlen).")
+            else:
+                endpoint_warn_var.set("")
+        else:
+            endpoint_entry.configure(state="disabled")
+            endpoint_warn_var.set("")
+
+    prov_var.trace_add("write", _update_endpoint_state)
+    endpoint_var.trace_add("write", _update_endpoint_state)
+    _update_endpoint_state()
+
+    def _snapshot_general():
+        return (
+            prov_var.get(),
+            endpoint_var.get(),
+            model_var.get(),
+            new_key_var.get(),
+            temp_var.get(),
+            prefix_var.get(),
+            delay_var.get(),
+            autostart_var.get(),
+            keys_cleared[0],
+        )
+
+    saved_snapshot = [_snapshot_general()]
+
+    btn_frame = ttk.Frame(root, padding=(10, 4, 10, 10))
+    btn_frame.pack(fill="x")
+
+    def _save():
+        prov_code = label_to_prov.get(prov_var.get(), "custom")
+        values = {
+            "provider": prov_code,
+            "endpoint": endpoint_var.get().strip(),
+            "model": model_var.get().strip(),
+            "temperature": temp_var.get().strip(),
+            "prefix": prefix_var.get(),
+            "trigger_delay_ms": delay_var.get().strip(),
+        }
+        errs = validate_settings(values)
+        if errs:
+            messagebox.showerror("Ungültige Eingaben", "\n".join(errs), parent=root)
+            return
+
+        cfg = _read_config_file()
+        cfg["provider"] = prov_code
+        if prov_code == "custom":
+            cfg["endpoint"] = values["endpoint"]
+        elif "endpoint" in cfg:
+            cfg["endpoint"] = cfg["endpoint"]
+        cfg["model"] = values["model"]
+        cfg["temperature"] = float(values["temperature"])
+        cfg["prefix"] = values["prefix"]
+        cfg["trigger_delay_ms"] = int(float(values["trigger_delay_ms"]))
+
+        raw_new_keys = new_key_var.get().strip()
+        if raw_new_keys:
+            parsed_keys = [k.strip() for k in re.split(r"[\n,]+", raw_new_keys) if k.strip()]
+            cfg["api_keys"] = parsed_keys
+            stored_keys[:] = parsed_keys
+        else:
+            cfg["api_keys"] = list(stored_keys)
+
+        try:
+            write_json_atomic(config_path, cfg)
+        except Exception as e:
+            messagebox.showerror("Fehler beim Speichern", f"config.json konnte nicht gespeichert werden:\n{e}", parent=root)
+            return
+
+        if autostart_var.get() != (bool(lnk_path and os.path.exists(lnk_path))):
+            try:
+                _set_autostart(autostart_var.get())
+            except Exception as e:
+                messagebox.showerror("Autostart-Fehler", f"Autostart konnte nicht geändert werden:\n{e}", parent=root)
+                return
+
+        new_key_var.set("")
+        keys_cleared[0] = False
+        _refresh_key_status()
+        saved_snapshot[0] = _snapshot_general()
+        messagebox.showinfo("Gespeichert", "Einstellungen wurden gespeichert.", parent=root)
+
+    def _close():
+        if _snapshot_general() != saved_snapshot[0]:
+            if not messagebox.askyesno("Ungespeicherte Änderungen", "Änderungen verwerfen und schließen?", parent=root):
+                return
+        root.destroy()
+
+    ttk.Button(btn_frame, text="Schließen", command=_close).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Speichern", command=_save).pack(side="right")
+    root.protocol("WM_DELETE_WINDOW", _close)
+    root.mainloop()
+
 # --- Window procedure ---
 def wnd_proc(hwnd, msg, wparam, lparam):
     global pending_trigger
@@ -2572,23 +2951,26 @@ def wnd_proc(hwnd, msg, wparam, lparam):
 
         elif msg == WM_TRAYICON:
             if lparam == WM_RBUTTONUP:
-                # Context menu with the app's only exit path. SetForegroundWindow is
+                # Context menu with Settings and Exit. SetForegroundWindow is
                 # required for the menu to dismiss when the user clicks elsewhere.
                 user32.SetForegroundWindow(hwnd)
                 hmenu = user32.CreatePopupMenu()
                 if hmenu:
-                    user32.AppendMenuW(hmenu, MF_STRING, MENU_ID_EXIT, "Exit SwiftSlate")
+                    user32.AppendMenuW(hmenu, MF_STRING, MENU_ID_SETTINGS, "Einstellungen\u2026")
+                    user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
+                    user32.AppendMenuW(hmenu, MF_STRING, MENU_ID_EXIT, "Beenden")
                     pt = wt.POINT()
                     user32.GetCursorPos(ctypes.byref(pt))
                     cmd = user32.TrackPopupMenu(hmenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                                 pt.x, pt.y, 0, hwnd, None)
                     user32.DestroyMenu(hmenu)
-                    if cmd == MENU_ID_EXIT:
+                    if cmd == MENU_ID_SETTINGS:
+                        _open_settings_window()
+                    elif cmd == MENU_ID_EXIT:
                         log("Exit requested from tray menu")
                         user32.DestroyWindow(hwnd)  # WM_DESTROY -> PostQuitMessage
             elif lparam == WM_LBUTTONDBLCLK:
-                log(f"Tray double-click (running: {provider}, {model})")
-                notify("SwiftSlate", f"Running — {provider} / {model}", NIIF_INFO)
+                _open_settings_window()
 
         elif msg == WM_DESTROY:
             user32.PostQuitMessage(0)
@@ -2619,6 +3001,10 @@ def acquire_singleton():
 # --- Main ---
 def main():
     global hwnd_main, cf_exclude, cf_no_history, cf_no_cloud, log_file
+
+    if "--settings" in sys.argv:
+        run_settings_window()
+        return
 
     # Only write debug.log when --debug is passed
     if debug_mode:
