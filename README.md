@@ -13,7 +13,7 @@ Schreib einen Befehl wie **`.fix`** ans Ende eines Textes, in jeder App, warte k
 <br>
 
 [![Windows](https://img.shields.io/badge/Windows_10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white)](#-installation)
-[![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](#-technik)
+[![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](#%EF%B8%8F-technik)
 [![License: MIT](https://img.shields.io/badge/MIT-blue?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/codingismynewgaming/SwiftSlateJMKEdition?style=for-the-badge)](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/releases/latest)
 
@@ -48,7 +48,7 @@ Schreib einen Befehl wie **`.fix`** ans Ende eines Textes, in jeder App, warte k
 - [So funktioniert es](#-so-funktioniert-es)
 - [Fehlersuche](#-fehlersuche)
 - [Datenschutz und Sicherheit](#-datenschutz-und-sicherheit)
-- [Technik](#-technik)
+- [Technik](#%EF%B8%8F-technik)
 - [Bekannte Grenzen](#%EF%B8%8F-bekannte-grenzen)
 - [Mitmachen](#-mitmachen)
 - [Lizenz und Dank](#-lizenz-und-dank)
@@ -305,7 +305,7 @@ Im Debug Modus läuft die App im Vordergrund und schreibt jede Erkennung, jeden 
 | 🔐 | **API Keys** | Liegen lokal in `config.json`, die der Installer nur für deinen Benutzer lesbar macht. Im Fenster werden Keys nie im Klartext angezeigt, in Meldungen nie Teile davon. |
 | 📊 | **Analyse** | Keine. Keine Telemetrie, kein Tracking. |
 | 🔑 | **Rechte** | Läuft als normaler Benutzerprozess, ohne Adminrechte. |
-| ✅ | **Installer** | Fester Release Tag, SHA256 Pins für jede Datei, kein `irm \| iex`. CI prüft, dass die Pins zum Code passen. |
+| ✅ | **Installer** | Fester Release Tag, SHA256 Pins für jede Datei, kein `irm \| iex`. Ein pre-commit Hook hält die Pins passend zum Code. |
 
 <br>
 
