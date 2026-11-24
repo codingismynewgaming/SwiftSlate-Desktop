@@ -26,6 +26,8 @@ WM_INPUT = 0x00FF
 WM_DESTROY = 0x0002
 WM_KEYDOWN = 0x0100
 WM_SYSKEYDOWN = 0x0104
+WM_TIMER = 0x0113
+TRIGGER_TIMER_ID = 1
 RIDEV_INPUTSINK = 0x00000100
 RID_INPUT = 0x10000003
 RIM_TYPEKEYBOARD = 1
@@ -205,6 +207,26 @@ class RAWKEYBOARD(ctypes.Structure):
                 ("Reserved", wt.USHORT), ("VKey", wt.USHORT),
                 ("Message", wt.UINT), ("ExtraInformation", wt.ULONG)]
 
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wt.DWORD),
+        ("flags", wt.DWORD),
+        ("hwndActive", wt.HWND),
+        ("hwndFocus", wt.HWND),
+        ("hwndCapture", wt.HWND),
+        ("hwndMenuOwner", wt.HWND),
+        ("hwndMoveSize", wt.HWND),
+        ("hwndCaret", wt.HWND),
+        ("rcCaret", wt.RECT),
+    ]
+
+user32.SetTimer.argtypes = [wt.HWND, ULONG_PTR, wt.UINT, ctypes.c_void_p]
+user32.SetTimer.restype = ULONG_PTR
+user32.KillTimer.argtypes = [wt.HWND, ULONG_PTR]
+user32.KillTimer.restype = wt.BOOL
+user32.GetGUIThreadInfo.argtypes = [wt.DWORD, ctypes.POINTER(GUITHREADINFO)]
+user32.GetGUIThreadInfo.restype = wt.BOOL
+
 class RAWINPUT(ctypes.Structure):
     _fields_ = [("header", RAWINPUTHEADER), ("keyboard", RAWKEYBOARD)]
 
@@ -237,6 +259,8 @@ provider = "gemini"  # groq, gemini, custom
 temperature = 0.5
 custom_endpoint = ""
 key_delay = 0.20  # Seconds between dependent keystroke operations (Ctrl+A → Ctrl+V, etc.)
+trigger_delay = 1.0  # Seconds to wait after typing a trigger before firing (0 = immediate)
+pending_trigger = None  # (name, fg_hwnd, focus_hwnd, buffer_text) or None
 
 # Key management (round-robin with rate-limit tracking)
 _key_robin_index = 0
@@ -305,6 +329,18 @@ def trigger_context_ok(full_text, trigger_full):
     if start_idx == 0:
         return True
     return stripped[start_idx - 1].isspace()
+
+def parse_trigger_delay(value) -> int:
+    """Parse trigger_delay_ms from config, returning an int clamped to 0..5000 (default 1000)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 1000
+    try:
+        fval = float(value)
+    except (OverflowError, ValueError, TypeError):
+        return 1000
+    if not math.isfinite(fval):
+        return 1000
+    return max(0, min(5000, int(fval)))
 
 def strip_markdown_fences(text):
     """Strip markdown code fences from API response if present.
@@ -631,7 +667,7 @@ def _notify_debounced(message, icon=NIIF_INFO):
 def load_config():
     global config, commands, api_keys, model, prefix, translate_prefix
     global trigger_strings, trigger_last_chars, max_buffer_len, keystroke_buffer
-    global provider, temperature, custom_endpoint, key_delay, spinner_mode
+    global provider, temperature, custom_endpoint, key_delay, trigger_delay, spinner_mode
 
     config_path = os.path.join(script_dir, "config.json")
 
@@ -725,6 +761,9 @@ def load_config():
         key_delay_ms = 200
     key_delay_ms = max(30, min(500, int(key_delay_ms)))  # Clamp 30-500ms
     key_delay = key_delay_ms / 1000.0  # Convert to seconds for time.sleep()
+
+    trigger_delay_ms = parse_trigger_delay(config.get("trigger_delay_ms", 1000))
+    trigger_delay = trigger_delay_ms / 1000.0
 
     # Validate spinner mode (animated | static | off)
     spinner_mode = config.get("spinner", "animated")
@@ -855,7 +894,7 @@ def load_config():
         for b in names[i+1:]:
             if b.startswith(a):
                 shadowed.append((a, b))
-    if shadowed:
+    if shadowed and trigger_delay == 0:
         a, b = shadowed[0]
         extra = f" (+{len(shadowed)-1} more)" if len(shadowed) > 1 else ""
         for a2, b2 in shadowed:
@@ -2353,8 +2392,26 @@ def process_keystroke(vkey, scan_code):
         log(f"ERROR in process_keystroke: {e}")
         keystroke_buffer.clear()
 
+def _get_focus_hwnd(fg_hwnd):
+    if not fg_hwnd:
+        return None
+    tid = user32.GetWindowThreadProcessId(fg_hwnd, None)
+    if not tid:
+        return None
+    gti = GUITHREADINFO()
+    gti.cbSize = ctypes.sizeof(GUITHREADINFO)
+    if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
+        return gti.hwndFocus
+    return None
+
 def _process_keystroke_inner(vkey, scan_code):
-    global last_fg_hwnd, last_keystroke_time, last_typed_vkey, last_typed_vkey_time
+    global last_fg_hwnd, last_keystroke_time, last_typed_vkey, last_typed_vkey_time, pending_trigger
+
+    if pending_trigger is not None:
+        if hwnd_main:
+            user32.KillTimer(hwnd_main, TRIGGER_TIMER_ID)
+        pending_trigger = None
+        log("Pending trigger cancelled (typing)")
 
     # Clear buffer on window change (prevents cross-app trigger firing)
     current_fg = user32.GetForegroundWindow()
@@ -2461,13 +2518,23 @@ def _process_keystroke_inner(vkey, scan_code):
     best_trigger = find_trigger(text, prefix, trigger_strings.keys(), buffer_truncated=buffer_truncated)
 
     if best_trigger and not processing:
-        keystroke_buffer.clear()
-        last_typed_vkey = vkey
-        last_typed_vkey_time = time.time()
-        handle_trigger(best_trigger)
+        if trigger_delay > 0 and hwnd_main:
+            delay_ms = int(round(trigger_delay * 1000))
+            focus_hwnd = _get_focus_hwnd(current_fg)
+            pending_trigger = (best_trigger, current_fg, focus_hwnd, text)
+            last_typed_vkey = vkey
+            last_typed_vkey_time = time.time()
+            user32.SetTimer(hwnd_main, TRIGGER_TIMER_ID, delay_ms, None)
+            log(f"Pending trigger: {prefix}{best_trigger} ({delay_ms} ms)")
+        else:
+            keystroke_buffer.clear()
+            last_typed_vkey = vkey
+            last_typed_vkey_time = time.time()
+            handle_trigger(best_trigger)
 
 # --- Window procedure ---
 def wnd_proc(hwnd, msg, wparam, lparam):
+    global pending_trigger
 
     try:
         if msg == WM_INPUT:
@@ -2483,6 +2550,25 @@ def wnd_proc(hwnd, msg, wparam, lparam):
                             pass
                         elif raw.keyboard.Message == WM_KEYDOWN or raw.keyboard.Message == WM_SYSKEYDOWN:
                             process_keystroke(raw.keyboard.VKey, raw.keyboard.MakeCode)
+
+        elif msg == WM_TIMER and wparam == TRIGGER_TIMER_ID:
+            if hwnd_main:
+                user32.KillTimer(hwnd_main, TRIGGER_TIMER_ID)
+            pt = pending_trigger
+            pending_trigger = None
+            if pt is not None and not processing:
+                name, fg_hwnd, focus_hwnd, buffer_text = pt
+                cur_fg = user32.GetForegroundWindow()
+                cur_focus = _get_focus_hwnd(cur_fg) if focus_hwnd is not None else None
+                if cur_fg != fg_hwnd:
+                    log("Pending trigger cancelled (foreground window changed)")
+                elif focus_hwnd is not None and cur_focus != focus_hwnd:
+                    log("Pending trigger cancelled (focus changed)")
+                elif "".join(keystroke_buffer) != buffer_text:
+                    log("Pending trigger cancelled (buffer changed)")
+                else:
+                    keystroke_buffer.clear()
+                    handle_trigger(name)
 
         elif msg == WM_TRAYICON:
             if lparam == WM_RBUTTONUP:
