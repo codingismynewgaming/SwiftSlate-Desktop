@@ -223,7 +223,7 @@ config = {}
 commands = {}
 api_keys = []
 model = ""
-prefix = "?"
+prefix = "."
 processing = False
 abort_event = threading.Event()  # Set when user types during processing — aborts spinner
 last_original_text = None
@@ -255,6 +255,56 @@ def wrap_user_text(text):
     """Wrap user text in <input>...</input> fencing for prompt injection resistance.
     Identical to Android's ApiClientUtils.wrapUserText."""
     return f"<input>\n{text}\n</input>"
+
+def find_trigger(text, prefix, names, buffer_truncated=False):
+    """Gibt den passenden Befehlsnamen zurück oder None.
+    text: Inhalt des Tastaturpuffers. names: iterierbare Befehlsnamen (inkl. System-Befehle).
+    Längster Treffer gewinnt. translate:XX (2 bis 5 ASCII alnum) wie bisher, Code klein geschrieben."""
+    if not text or not prefix:
+        return None
+    best_trigger = None
+    best_len = 0
+
+    def _boundary_ok(start_idx):
+        if start_idx == 0:
+            return not buffer_truncated
+        return text[start_idx - 1].isspace()
+
+    for name in names:
+        if not name:
+            continue
+        full = prefix + name
+        if text.endswith(full) and len(full) > best_len:
+            start_idx = len(text) - len(full)
+            if _boundary_ok(start_idx):
+                best_trigger = name
+                best_len = len(full)
+
+    t_prefix = prefix + "translate:"
+    t_idx = text.rfind(t_prefix)
+    if t_idx >= 0:
+        after = text[t_idx + len(t_prefix):]
+        if 2 <= len(after) <= 5 and all(c.isascii() and c.isalnum() for c in after):
+            full_trigger = "translate:" + after.lower()
+            full_len = len(prefix + full_trigger)
+            if full_len > best_len and _boundary_ok(t_idx):
+                best_trigger = full_trigger
+                best_len = full_len
+
+    return best_trigger
+
+def trigger_context_ok(full_text, trigger_full):
+    """True, wenn full_text.rstrip('\\r\\n') case-insensitiv mit trigger_full endet
+    und das Zeichen davor Whitespace ist oder der Text dort beginnt."""
+    if not full_text or not trigger_full:
+        return False
+    stripped = full_text.rstrip("\r\n")
+    if not stripped.lower().endswith(trigger_full.lower()):
+        return False
+    start_idx = len(stripped) - len(trigger_full)
+    if start_idx == 0:
+        return True
+    return stripped[start_idx - 1].isspace()
 
 def strip_markdown_fences(text):
     """Strip markdown code fences from API response if present.
@@ -644,7 +694,7 @@ def load_config():
     if not isinstance(model, str) or not model.strip():
         log(f"WARNING: Invalid model value, defaulting to {default_model}")
         model = default_model
-    prefix = config.get("prefix", "?")
+    prefix = config.get("prefix", ".")
     temperature = config.get("temperature", 0.5)
     custom_endpoint = config.get("endpoint", "")
     if not isinstance(custom_endpoint, str):
@@ -653,9 +703,10 @@ def load_config():
         custom_endpoint = ""
 
     # Validate prefix (must happen before translate_prefix is computed)
-    if not isinstance(prefix, str) or not prefix:
-        log("WARNING: Invalid prefix, defaulting to '?'")
-        prefix = "?"
+    if (not isinstance(prefix, str) or not (1 <= len(prefix) <= 3)
+            or any(c.isspace() or c.isalnum() for c in prefix)):
+        log("WARNING: Invalid prefix, defaulting to '.'")
+        prefix = "."
     translate_prefix = prefix + "translate:"
 
     # Validate temperature. json.load accepts Infinity/NaN and huge int literals, and
@@ -1721,10 +1772,20 @@ def _retry_paste(text, max_retries=5):
     log("All retry paste attempts failed")
     return False
 
+def _deselect_and_restore_clipboard(hwnd, prev_clip, prev_extra):
+    if hwnd and user32.GetForegroundWindow() == hwnd:
+        inputs_deselect = (INPUT * 2)(
+            _make_key(VK_RIGHT),
+            _make_key(VK_RIGHT, KEYEVENTF_KEYUP),
+        )
+        user32.SendInput(2, ctypes.byref(inputs_deselect), ctypes.sizeof(INPUT))
+    if prev_clip is not None or prev_extra:
+        set_clipboard_silent(prev_clip or "", prev_extra)
+
 # --- Transform (AI command) ---
 def do_transform(trigger_name, prompt):
     global processing, last_original_text
-    log(f"--- Transform: ?{trigger_name} ---")
+    log(f"--- Transform: {prefix}{trigger_name} ---")
 
     hwnd = user32.GetForegroundWindow()
     trigger_full = prefix + trigger_name
@@ -1744,8 +1805,13 @@ def do_transform(trigger_name, prompt):
             _notify_debounced("Could not read the text in this field.", NIIF_WARNING)
             return
 
+        if not trigger_context_ok(full_text, trigger_full):
+            log("Trigger context rejected")
+            _deselect_and_restore_clipboard(hwnd, prev_clip, prev_extra)
+            return
+
         # Strip trigger (case-insensitive for translate:XX)
-        input_text = full_text
+        input_text = full_text.rstrip("\r\n")
         if input_text.lower().endswith(trigger_full.lower()):
             input_text = input_text[:-len(trigger_full)].rstrip()
 
@@ -2039,7 +2105,8 @@ def do_undo():
 # --- Clipboard commands ---
 def do_clipboard_command(command):
     global processing, internal_clipboard, last_original_text
-    log(f"--- Clipboard: ?{command} ---")
+    log(f"--- Clipboard: {prefix}{command} ---")
+    hwnd = user32.GetForegroundWindow()
 
     try:
         trigger_full = prefix + command
@@ -2054,16 +2121,11 @@ def do_clipboard_command(command):
                 set_clipboard_silent(prev_clip or "", prev_extra)
             return
 
-        # The trigger must be the last thing in the field. grab_field_text() selects all, so
-        # full_text is the WHOLE field; without this guard ?cut replaced the entire field with
-        # "" (and still toasted success) when the trigger sat mid-text.
-        if not full_text.endswith(trigger_full):
-            log("Clipboard command: trigger not at end of field, leaving text unchanged")
-            _notify_debounced(f"{prefix}{command} only works at the end of the text.", NIIF_WARNING)
-            if prev_clip is not None or prev_extra:
-                set_clipboard_silent(prev_clip or "", prev_extra)
+        if not trigger_context_ok(full_text, trigger_full):
+            log("Trigger context rejected")
+            _deselect_and_restore_clipboard(hwnd, prev_clip, prev_extra)
             return
-        text_before = full_text[:-len(trigger_full)].rstrip()
+        text_before = full_text.rstrip("\r\n")[:-len(trigger_full)].rstrip()
 
         # The paste below replaces the field. If the user started typing after the grab,
         # pasting would destroy their keystrokes — abort like do_transform does.
@@ -2139,7 +2201,8 @@ def do_clipboard_command(command):
 # --- Replacer commands ---
 def do_replacer(trigger_name, cmd_type, value):
     global processing, last_original_text
-    log(f"--- Replacer ({cmd_type}): ?{trigger_name} ---")
+    log(f"--- Replacer ({cmd_type}): {prefix}{trigger_name} ---")
+    hwnd = user32.GetForegroundWindow()
 
     try:
         trigger_full = prefix + trigger_name
@@ -2154,20 +2217,12 @@ def do_replacer(trigger_name, cmd_type, value):
                 set_clipboard_silent(prev_clip or "", prev_extra)
             return
 
-        # The trigger must be at the end of the captured text. grab_field_text() does a
-        # select-all, so full_text is the WHOLE field — without this guard a trigger that
-        # isn't the last thing in a multi-line field left `before` empty and the paste
-        # below replaced the entire field with just the replacement.
-        # grab_field_text() leaves the field itself untouched, so the safe action is to
-        # do nothing but put the user's clipboard back.
-        if not full_text.endswith(trigger_full):
-            log("Replacer: trigger not at end of field, leaving text unchanged")
-            _notify_debounced(f"{prefix}{trigger_name} only works at the end of the text.", NIIF_WARNING)
-            if prev_clip is not None or prev_extra:
-                set_clipboard_silent(prev_clip or "", prev_extra)
+        if not trigger_context_ok(full_text, trigger_full):
+            log("Trigger context rejected")
+            _deselect_and_restore_clipboard(hwnd, prev_clip, prev_extra)
             return
 
-        before = full_text[:-len(trigger_full)]
+        before = full_text.rstrip("\r\n")[:-len(trigger_full)]
 
         # Record the undo point so ?undo restores this exact text after the replacement.
         last_original_text = before.rstrip()
@@ -2266,7 +2321,7 @@ def handle_trigger(trigger_name):
     # losing a legitimate abort.
     abort_event.clear()
     processing = True
-    log(f"Trigger: ?{trigger_name}")
+    log(f"Trigger: {prefix}{trigger_name}")
 
     try:
         if trigger_name == "undo":
@@ -2402,26 +2457,8 @@ def _process_keystroke_inner(vkey, scan_code):
 
     # Check triggers
     text = "".join(keystroke_buffer)
-    best_trigger = None
-    best_len = 0
-
-    for name, full in trigger_strings.items():
-        if text.endswith(full) and len(full) > best_len:
-            best_trigger = name
-            best_len = len(full)
-
-    # Check translate:XX pattern — 2-5 char alphanumeric language code, matching Android's
-    # rule (open-ended to support ISO 639 variants like "pt-BR" without a hyphen, without
-    # maintaining a hardcoded list; the AI model handles invalid codes gracefully).
-    t_idx = text.rfind(translate_prefix)
-    if t_idx >= 0:
-        after = text[t_idx + len(translate_prefix):]
-        if 2 <= len(after) <= 5 and all(c.isascii() and c.isalnum() for c in after):
-            full_trigger = "translate:" + after.lower()
-            full_len = len(prefix + full_trigger)
-            if full_len > best_len:
-                best_trigger = full_trigger
-                best_len = full_len
+    buffer_truncated = (keystroke_buffer.maxlen is not None and len(keystroke_buffer) == keystroke_buffer.maxlen)
+    best_trigger = find_trigger(text, prefix, trigger_strings.keys(), buffer_truncated=buffer_truncated)
 
     if best_trigger and not processing:
         keystroke_buffer.clear()
