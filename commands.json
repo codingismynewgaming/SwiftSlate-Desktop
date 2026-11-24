@@ -1,15 +1,15 @@
 [
-  { "trigger": "fix", "type": "ai", "prompt": "Fix grammar, spelling, and punctuation errors." },
-  { "trigger": "improve", "type": "ai", "prompt": "Rewrite to improve clarity, flow, and coherence." },
-  { "trigger": "shorten", "type": "ai", "prompt": "Rewrite to be more concise while preserving the core meaning." },
-  { "trigger": "expand", "type": "ai", "prompt": "Rewrite with more detail. Elaborate only on what is stated or widely known \u2014 do not fabricate information." },
-  { "trigger": "formal", "type": "ai", "prompt": "Rewrite in a formal, professional tone." },
-  { "trigger": "casual", "type": "ai", "prompt": "Rewrite in a casual, friendly tone." },
-  { "trigger": "emoji", "type": "ai", "prompt": "Add relevant emojis throughout." },
-  { "trigger": "human", "type": "ai", "prompt": "Rewrite to sound naturally human, not AI-generated. Never use emdashes or semicolons, use commas or periods instead. Drop AI clich\u00e9s and filler phrases. Use contractions, everyday words, and varied sentence lengths. Keep all facts, names, and numbers intact." },
-  { "trigger": "reply", "type": "ai", "prompt": "Generate a contextual reply to this message." },
+  { "trigger": "fix",      "type": "ai", "prompt": "Korrigiere Rechtschreibung, Grammatik und Zeichensetzung. Behalte Sprache, Inhalt und Stil bei." },
+  { "trigger": "kurz",     "type": "ai", "prompt": "Kürze den Text deutlich, behalte die Kernaussage und die Sprache bei." },
+  { "trigger": "en",       "type": "ai", "prompt": "Übersetze den Text ins Englische. Gib nur die Übersetzung aus." },
+  { "trigger": "de",       "type": "ai", "prompt": "Übersetze den Text ins Deutsche. Gib nur die Übersetzung aus." },
+  { "trigger": "höflich",  "type": "ai", "prompt": "Formuliere den Text höflich und freundlich, ohne den Inhalt zu ändern. Behalte die Sprache bei." },
+  { "trigger": "hoeflich", "type": "ai", "prompt": "Formuliere den Text höflich und freundlich, ohne den Inhalt zu ändern. Behalte die Sprache bei." },
+  { "trigger": "locker",   "type": "ai", "prompt": "Formuliere den Text locker und freundlich, wie unter Bekannten. Behalte die Sprache bei." },
+  { "trigger": "besser",   "type": "ai", "prompt": "Verbessere Klarheit und Lesefluss. Behalte Inhalt und Sprache bei." },
+  { "trigger": "mensch",   "type": "ai", "prompt": "Formuliere den Text natürlich und menschlich. Keine Gedankenstriche, keine Floskeln, kurze Sätze. Fakten, Namen und Zahlen bleiben gleich. Behalte die Sprache bei." },
+  { "trigger": "antwort",  "type": "ai", "prompt": "Schreibe eine kurze, passende Antwort auf diese Nachricht in derselben Sprache." },
 
-  { "trigger": "date", "type": "replacer-shell", "value": "powershell -NoProfile -Command \"Get-Date -Format 'dddd, MMMM dd, yyyy'\"" },
-  { "trigger": "time", "type": "replacer-shell", "value": "powershell -NoProfile -Command \"Get-Date -Format 'hh:mm tt'\"" },
-  { "trigger": "ip", "type": "replacer-shell", "value": "curl -s https://ifconfig.me" }
+  { "trigger": "datum",    "type": "replacer-shell", "value": "powershell -NoProfile -Command \"Get-Date -Format 'dddd, dd. MMMM yyyy'\"" },
+  { "trigger": "zeit",     "type": "replacer-shell", "value": "powershell -NoProfile -Command \"Get-Date -Format 'HH:mm'\"" }
 ]
