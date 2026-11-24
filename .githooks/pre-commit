@@ -1,29 +1,46 @@
 #!/usr/bin/env bash
-# Auto-syncs the pinned SHA-256 hashes in install.ps1 whenever SwiftSlate.pyw
-# or commands.json changes, so the pin is always correct at commit time.
-# CI re-verifies the same pins after every push (belt and suspenders).
+# Auto-syncs the pinned SHA-256 hashes in install/Install-SwiftSlate.ps1 whenever
+# SwiftSlate.pyw, commands.json, or assets/icon.ico changes.
 set -uo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-updated=0
-for f in SwiftSlate.pyw commands.json; do
-  actual=$(sha256sum "$f" | awk '{print toupper($1)}')
-  pinned=$(grep -oP "\"$f\"\s*=\s*\"\K[0-9A-F]{64}" install.ps1 | head -1 || true)
-  if [ -z "$pinned" ] || [ "$actual" != "$pinned" ]; then
-    if [ -n "$pinned" ]; then
-      sed -i -E "s/(\"$f\"[[:space:]]*=[[:space:]]*\")[0-9A-Fa-f]{64}/\1$actual/" install.ps1
-      echo "pre-commit: updated install.ps1 pin for $f"
-    else
-      echo "pre-commit: could not find pin for $f in install.ps1 - add it manually"
-      exit 1
-    fi
-    updated=1
-  fi
-done
+installer="install/Install-SwiftSlate.ps1"
+if [ ! -f "$installer" ]; then
+  exit 0
+fi
 
-if [ "$updated" -eq 1 ]; then
-  git add install.ps1
+updated=$(python3 - <<'PY'
+import hashlib, pathlib, re, sys
+
+installer_path = pathlib.Path("install/Install-SwiftSlate.ps1")
+content = installer_path.read_text(encoding="utf-8")
+changed = False
+
+for rel in ("SwiftSlate.pyw", "commands.json", "assets/icon.ico"):
+    p = pathlib.Path(rel)
+    if not p.is_file():
+        print(f"pre-commit: missing {rel}", file=sys.stderr)
+        sys.exit(1)
+    actual = hashlib.sha256(p.read_bytes()).hexdigest().upper()
+    pattern = re.compile(r'("' + re.escape(rel) + r'"\s*=\s*")([0-9A-Fa-f]{64})(")')
+    m = pattern.search(content)
+    if not m:
+        print(f"pre-commit: could not find pin for {rel} in {installer_path}", file=sys.stderr)
+        sys.exit(1)
+    if m.group(2).upper() != actual:
+        content = pattern.sub(rf'\g<1>{actual}\g<3>', content, count=1)
+        print(f"pre-commit: updated {installer_path} pin for {rel}")
+        changed = True
+
+if changed:
+    installer_path.write_text(content, encoding="utf-8")
+print("1" if changed else "0")
+PY
+)
+
+if [ "$updated" = "1" ]; then
+  git add "$installer"
 fi
 exit 0

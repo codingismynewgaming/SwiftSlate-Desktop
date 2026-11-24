@@ -30,6 +30,25 @@ Type a trigger like **`?fix`** at the end of any text, in any app, and watch it 
 
 <br>
 
+### Installation (Fork)
+
+1. `Install-SwiftSlate.ps1` aus dem [Release v1.0.0](https://github.com/codingismynewgaming/SwiftSlate-Desktop/releases/tag/v1.0.0) (bzw. unter `install/Install-SwiftSlate.ps1`) herunterladen.
+2. In einer normalen PowerShell (ohne Adminrechte) ausführen:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-SwiftSlate.ps1
+```
+
+Beispiele mit Parametern:
+
+```powershell
+# OpenAI-kompatibler Endpoint (z. B. GWDG SAIA) mit API-Key-Abfrage
+.\Install-SwiftSlate.ps1 -Endpoint https://chat-ai.academiccloud.de/v1 -Model deepseek-v4.1-flash-1017 -SetKey
+
+# Lokales Ollama ohne API-Key
+.\Install-SwiftSlate.ps1 -Endpoint http://localhost:11434/v1 -Model gemma3:12b
+```
+
 ## 📋 Table of Contents
 
 - [Quick Demo](#-quick-demo)
