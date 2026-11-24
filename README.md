@@ -30,6 +30,23 @@ Type a trigger like **`?fix`** at the end of any text, in any app, and watch it 
 
 <br>
 
+### Deutsche Standardbefehle (`commands.json`)
+
+| Auslöser | Typ | Beschreibung |
+|---|---|---|
+| `.fix` | KI | Rechtschreibung, Grammatik und Zeichensetzung korrigieren |
+| `.kurz` | KI | Text deutlich kürzen, Kernaussage und Sprache behalten |
+| `.en` | KI | Text ins Englische übersetzen |
+| `.de` | KI | Text ins Deutsche übersetzen |
+| `.höflich` | KI | Text höflich und freundlich umformulieren |
+| `.hoeflich` | KI | Text höflich und freundlich umformulieren (ohne Umlaut) |
+| `.locker` | KI | Text locker und freundlich formulieren |
+| `.besser` | KI | Klarheit und Lesefluss verbessern |
+| `.mensch` | KI | Text natürlich und menschlich formulieren |
+| `.antwort` | KI | Kurze, passende Antwort auf eine Nachricht schreiben |
+| `.datum` | Shell | Aktuelles deutsches Datum einfügen |
+| `.zeit` | Shell | Aktuelle Uhrzeit (24h) einfügen |
+
 ## 📋 Table of Contents
 
 - [Quick Demo](#-quick-demo)
