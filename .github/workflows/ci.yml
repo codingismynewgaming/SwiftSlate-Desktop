@@ -23,24 +23,24 @@ jobs:
           pip install 'ruff<1' pyflakes
 
       - name: Syntax check
-        run: python -m py_compile SwiftSlate.pyw
+        run: python -m py_compile SwiftSlateJMKEdition.pyw
 
       - name: Pure-logic regression tests
         run: python -m unittest discover -s tests -v
 
       - name: Pyflakes (undefined names, unused imports)
-        run: pyflakes SwiftSlate.pyw
+        run: pyflakes SwiftSlateJMKEdition.pyw
 
       - name: Ruff (real bugs only)
-        run: ruff check --select F,E9,B,UP024,UP041,PLW1510 SwiftSlate.pyw
+        run: ruff check --select F,E9,B,UP024,UP041,PLW1510 SwiftSlateJMKEdition.pyw
 
       - name: Verify installer hashes match files
         run: |
           python - <<'PY'
           import hashlib, pathlib, re, sys
 
-          text = pathlib.Path("install/Install-SwiftSlate.ps1").read_text(encoding="utf-8")
-          for rel in ("SwiftSlate.pyw", "commands.json", "assets/icon.ico"):
+          text = pathlib.Path("install/Install-SwiftSlateJMKEdition.ps1").read_text(encoding="utf-8")
+          for rel in ("SwiftSlateJMKEdition.pyw", "commands.json", "assets/icon.ico"):
               actual = hashlib.sha256(pathlib.Path(rel).read_bytes()).hexdigest().upper()
               m = re.search(r'"' + re.escape(rel) + r'"\s*=\s*"([0-9A-Fa-f]{64})"', text)
               if not m or m.group(1).upper() != actual:
@@ -52,7 +52,7 @@ jobs:
 
       - name: Verify stdlib-only imports
         run: |
-          python -c "import ast,sys,pathlib; t=ast.parse(pathlib.Path('SwiftSlate.pyw').read_text(encoding='utf-8')); m=set()
+          python -c "import ast,sys,pathlib; t=ast.parse(pathlib.Path('SwiftSlateJMKEdition.pyw').read_text(encoding='utf-8')); m=set()
           for n in ast.walk(t):
               if isinstance(n,ast.Import): m|={a.name.split('.')[0] for a in n.names}
               elif isinstance(n,ast.ImportFrom) and n.level==0 and n.module: m.add(n.module.split('.')[0])
@@ -68,4 +68,4 @@ jobs:
           echo "secrets check OK"
 
       - name: PowerShell syntax check
-        run: pwsh -NoProfile -Command '$errs = $null; [System.Management.Automation.Language.Parser]::ParseFile("install/Install-SwiftSlate.ps1", [ref]$null, [ref]$errs) > $null; if ($errs.Count) { $errs | ForEach-Object { Write-Host $_.Message }; exit 1 } else { Write-Host "install/Install-SwiftSlate.ps1 parses OK" }'
+        run: pwsh -NoProfile -Command '$errs = $null; [System.Management.Automation.Language.Parser]::ParseFile("install/Install-SwiftSlateJMKEdition.ps1", [ref]$null, [ref]$errs) > $null; if ($errs.Count) { $errs | ForEach-Object { Write-Host $_.Message }; exit 1 } else { Write-Host "install/Install-SwiftSlateJMKEdition.ps1 parses OK" }'

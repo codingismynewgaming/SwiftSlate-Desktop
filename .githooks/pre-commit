@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Auto-syncs the pinned SHA-256 hashes in install/Install-SwiftSlate.ps1 whenever
-# SwiftSlate.pyw, commands.json, or assets/icon.ico changes.
+# Auto-syncs the pinned SHA-256 hashes in install/Install-SwiftSlateJMKEdition.ps1 whenever
+# SwiftSlateJMKEdition.pyw, commands.json, or assets/icon.ico changes.
 set -uo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-installer="install/Install-SwiftSlate.ps1"
+installer="install/Install-SwiftSlateJMKEdition.ps1"
 if [ ! -f "$installer" ]; then
   exit 0
 fi
@@ -14,11 +14,11 @@ fi
 updated=$(python3 - <<'PY'
 import hashlib, pathlib, re, sys
 
-installer_path = pathlib.Path("install/Install-SwiftSlate.ps1")
+installer_path = pathlib.Path("install/Install-SwiftSlateJMKEdition.ps1")
 content = installer_path.read_text(encoding="utf-8")
 changed = False
 
-for rel in ("SwiftSlate.pyw", "commands.json", "assets/icon.ico"):
+for rel in ("SwiftSlateJMKEdition.pyw", "commands.json", "assets/icon.ico"):
     p = pathlib.Path(rel)
     if not p.is_file():
         print(f"pre-commit: missing {rel}", file=sys.stderr)

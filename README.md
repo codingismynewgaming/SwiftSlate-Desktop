@@ -2,7 +2,7 @@
 
 <br>
 
-# SwiftSlate Desktop
+# SwiftSlateJMKEdition
 
 ### System-wide AI text transformation for Windows
 
@@ -18,9 +18,9 @@ Type a trigger like **`?fix`** at the end of any text, in any app, and watch it 
 
 [<img src="https://img.shields.io/badge/⬇_Install-282828?style=for-the-badge" alt="Install" height="36">](#-getting-started)
 &nbsp;&nbsp;
-[<img src="https://img.shields.io/badge/🐛_Report_Bug-282828?style=for-the-badge" alt="Report Bug" height="36">](https://github.com/Musheer360/SwiftSlate-Desktop/issues)
+[<img src="https://img.shields.io/badge/🐛_Report_Bug-282828?style=for-the-badge" alt="Report Bug" height="36">](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/issues)
 &nbsp;&nbsp;
-[<img src="https://img.shields.io/badge/💡_Request_Feature-282828?style=for-the-badge" alt="Request Feature" height="36">](https://github.com/Musheer360/SwiftSlate-Desktop/issues)
+[<img src="https://img.shields.io/badge/💡_Request_Feature-282828?style=for-the-badge" alt="Request Feature" height="36">](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/issues)
 
 <br>
 
@@ -32,11 +32,12 @@ Type a trigger like **`?fix`** at the end of any text, in any app, and watch it 
 
 ## Dieser Fork
 
-Dieses Repository ist ein Fork von [Musheer360/SwiftSlate-Desktop](https://github.com/Musheer360/SwiftSlate-Desktop) (MIT-Lizenz, vielen Dank an Musheer360 für das Originalprojekt!).
+**SwiftSlateJMKEdition** (bis v1.0.0 „SwiftSlate Desktop“ Fork, Repo früher `SwiftSlate-Desktop`) ist ein Fork von [Musheer360/SwiftSlate-Desktop](https://github.com/Musheer360/SwiftSlate-Desktop) (MIT-Lizenz, vielen Dank an Musheer360 für das Originalprojekt!).
 
 **Was in diesem Fork anders ist:**
 - Auslöser-Präfix `.` statt `?` mit konfigurierbarer Tipp-Pause (`trigger_delay_ms`, Standard 1000 ms) und sicherer Erkennung (keine Satzpunkte, URLs oder Dateinamen)
 - Eigenes Tray- und Fenster-Icon (`assets/icon.ico`), Tray-Icon direkt ab Programmstart
+- Tray-Icon: **Klick oder Doppelklick** öffnet die Einstellungen, **Rechtsklick** zeigt das Menü (Einstellungen, Beenden)
 - Grafisches Einstellungsfenster (`tkinter`) für Allgemein-Einstellungen und Befehls-Editor
 - Deutsche Standardbefehle in `commands.json`
 - Eigener generischer Installer unter `install/`
@@ -48,22 +49,26 @@ Dieses Repository ist ein Fork von [Musheer360/SwiftSlate-Desktop](https://githu
 
 ### Installation (Fork)
 
-1. `Install-SwiftSlate.ps1` aus dem [Release v1.0.0](https://github.com/codingismynewgaming/SwiftSlate-Desktop/releases/tag/v1.0.0) (bzw. unter `install/Install-SwiftSlate.ps1`) herunterladen.
+1. `Install-SwiftSlateJMKEdition.ps1` aus dem [neuesten Release](https://github.com/codingismynewgaming/SwiftSlateJMKEdition/releases/latest) (bzw. unter `install/Install-SwiftSlateJMKEdition.ps1`) herunterladen.
 2. In einer normalen PowerShell (ohne Adminrechte) ausführen:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-SwiftSlate.ps1
+powershell -ExecutionPolicy Bypass -File .\Install-SwiftSlateJMKEdition.ps1
 ```
 
 Beispiele mit Parametern:
 
 ```powershell
 # OpenAI-kompatibler Endpoint (z. B. GWDG SAIA) mit API-Key-Abfrage
-.\Install-SwiftSlate.ps1 -Endpoint https://chat-ai.academiccloud.de/v1 -Model deepseek-v4.1-flash-1017 -SetKey
+.\Install-SwiftSlateJMKEdition.ps1 -Endpoint https://chat-ai.academiccloud.de/v1 -Model deepseek-v4.1-flash-1017 -SetKey
 
 # Lokales Ollama ohne API-Key
-.\Install-SwiftSlate.ps1 -Endpoint http://localhost:11434/v1 -Model gemma3:12b
+.\Install-SwiftSlateJMKEdition.ps1 -Endpoint http://localhost:11434/v1 -Model gemma3:12b
 ```
+
+Installiert wird nach `%LOCALAPPDATA%\SwiftSlateJMKEdition`. Eine alte Installation unter `%LOCALAPPDATA%\SwiftSlate` wird erkannt: `config.json` und `commands.json` werden übernommen, die alte Instanz beendet und die alte Autostart-Verknüpfung `SwiftSlate.lnk` entfernt. Der alte Ordner bleibt stehen und kann danach von Hand gelöscht werden.
+
+Fehler beim Öffnen der Einstellungen landen in `debug.log` im Programmordner (ohne API-Keys).
 
 ### Deutsche Standardbefehle (`commands.json`)
 
@@ -367,7 +372,7 @@ flowchart TD
 
 ```powershell
 cd $env:USERPROFILE\.swiftslate
-python SwiftSlate.pyw --debug
+python SwiftSlateJMKEdition.pyw --debug
 ```
 
 If using the embedded runtime:
@@ -430,17 +435,17 @@ git clone https://github.com/Musheer360/SwiftSlate-Desktop.git
 cd SwiftSlate-Desktop
 
 # Run in debug mode
-python SwiftSlate.pyw --debug
+python SwiftSlateJMKEdition.pyw --debug
 ```
 
 ### Verify Syntax
 
 ```powershell
-python -c "import py_compile; py_compile.compile('SwiftSlate.pyw', doraise=True)"
+python -c "import py_compile; py_compile.compile('SwiftSlateJMKEdition.pyw', doraise=True)"
 ```
 
 > [!NOTE]
-> The entire app is a single `SwiftSlate.pyw` file with zero pip dependencies. No build step required.
+> The entire app is a single `SwiftSlateJMKEdition.pyw` file with zero pip dependencies. No build step required.
 
 <br>
 
@@ -458,17 +463,17 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for full detai
 
 ```bash
 # 1. Fork the repository, then:
-git clone https://github.com/YOUR_USERNAME/SwiftSlate-Desktop.git
-cd SwiftSlate-Desktop
+git clone https://github.com/YOUR_USERNAME/SwiftSlateJMKEdition.git
+cd SwiftSlateJMKEdition
 
 # 2. Create a feature branch
 git checkout -b feature/amazing-feature
 
 # 3. Make your changes and test
-python SwiftSlate.pyw --debug
+python SwiftSlateJMKEdition.pyw --debug
 
 # 4. Verify syntax
-python -c "import py_compile; py_compile.compile('SwiftSlate.pyw', doraise=True)"
+python -c "import py_compile; py_compile.compile('SwiftSlateJMKEdition.pyw', doraise=True)"
 
 # 5. Push and open a Pull Request
 git push origin feature/amazing-feature

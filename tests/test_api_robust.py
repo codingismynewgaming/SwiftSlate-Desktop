@@ -7,7 +7,7 @@ import unittest
 
 
 def load_robust_helpers():
-    source_path = Path(__file__).parents[1] / "SwiftSlate.pyw"
+    source_path = Path(__file__).parents[1] / "SwiftSlateJMKEdition.pyw"
     module = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
     names = {"extract_openai_content", "strip_think_block"}
     body = [node for node in module.body if isinstance(node, ast.FunctionDef) and node.name in names]

@@ -1,14 +1,18 @@
 <#
-  SwiftSlate Desktop: manuelle Installation ohne "irm | iex"
+  SwiftSlateJMKEdition: manuelle Installation ohne "irm | iex"
+  Fork von https://github.com/Musheer360/SwiftSlate-Desktop (MIT Lizenz).
   SHA256-gepruefter Download vom Release-Tag.
   Ohne Adminrechte ausfuehren. Idempotent: mehrfach ausfuehren ist sicher.
+  Eine alte Installation unter %LOCALAPPDATA%\SwiftSlate wird erkannt:
+  config.json und commands.json werden uebernommen, die alte Instanz beendet,
+  die alte Autostart Verknuepfung SwiftSlate.lnk entfernt. Der alte Ordner bleibt.
 
   Beispiele:
-    .\Install-SwiftSlate.ps1 -Endpoint https://chat-ai.academiccloud.de/v1 -Model deepseek-v4.1-flash-1017 -SetKey
-    .\Install-SwiftSlate.ps1 -Endpoint http://localhost:11434/v1 -Model gemma3:12b
-    .\Install-SwiftSlate.ps1 -SetKey                   # nur den Key neu setzen
-    .\Install-SwiftSlate.ps1 -ResetConfig              # config.json neu schreiben
-    .\Install-SwiftSlate.ps1 -Uninstall
+    .\Install-SwiftSlateJMKEdition.ps1 -Endpoint https://chat-ai.academiccloud.de/v1 -Model deepseek-v4.1-flash-1017 -SetKey
+    .\Install-SwiftSlateJMKEdition.ps1 -Endpoint http://localhost:11434/v1 -Model gemma3:12b
+    .\Install-SwiftSlateJMKEdition.ps1 -SetKey                   # nur den Key neu setzen
+    .\Install-SwiftSlateJMKEdition.ps1 -ResetConfig              # config.json neu schreiben
+    .\Install-SwiftSlateJMKEdition.ps1 -Uninstall
 #>
 [CmdletBinding()]
 param(
@@ -27,29 +31,44 @@ $ProgressPreference    = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # --- Feste Werte ---
-$Repo    = 'codingismynewgaming/SwiftSlate-Desktop'
-$Release = 'v1.0.0'
+$Repo    = 'codingismynewgaming/SwiftSlateJMKEdition'
+$Release = 'v1.1.0'
 $RawBase = "https://raw.githubusercontent.com/$Repo/$Release"
 $Hashes  = @{
-    "SwiftSlate.pyw"  = "DB1D8296838BA578816055222758F89D8DE3F8868845898A553D028B9F980F92"
+    "SwiftSlateJMKEdition.pyw" = "1890F6B7B69C24D3CE57489A7888BD77A82EFFF89B8119583E3C29AE3D7894C4"
     "commands.json"   = "54BED0023113EB7A09C396870E615F99BC40C86184D62FF9026059115D7A8EF0"
     "assets/icon.ico" = "31DC7128E226247F97605E8EB88D08ECDB549A516F4EED8EF17AA252BE20200A"
 }
 
-$Base      = Join-Path $env:LOCALAPPDATA 'SwiftSlate'
+$AppName   = 'SwiftSlateJMKEdition'
+$Base      = Join-Path $env:LOCALAPPDATA $AppName
 $AppDir    = Join-Path $Base 'app'
 $AssetsDir = Join-Path $AppDir 'assets'
 $VenvDir   = Join-Path $Base 'venv'
-$Pyw       = Join-Path $AppDir 'SwiftSlate.pyw'
+$Pyw       = Join-Path $AppDir "$AppName.pyw"
 $CfgPath   = Join-Path $AppDir 'config.json'
 $CmdPath   = Join-Path $AppDir 'commands.json'
-$Lnk       = Join-Path ([Environment]::GetFolderPath('Startup')) 'SwiftSlate.lnk'
+$Startup   = [Environment]::GetFolderPath('Startup')
+$Lnk       = Join-Path $Startup "$AppName.lnk"
 $Utf8      = New-Object System.Text.UTF8Encoding($false)
 
-function Stop-SwiftSlate {
+# Alte Installation (bis v1.0.0 "SwiftSlate")
+$OldBase   = Join-Path $env:LOCALAPPDATA 'SwiftSlate'
+$OldAppDir = Join-Path $OldBase 'app'
+$OldLnk    = Join-Path $Startup 'SwiftSlate.lnk'
+
+function Stop-ByScript([string]$ScriptPath) {
     Get-CimInstance Win32_Process -EA SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*$AppDir\SwiftSlate.pyw*" } |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$ScriptPath*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue; Wait-Process -Id $_.ProcessId -Timeout 10 -EA SilentlyContinue }
+}
+
+function Stop-SwiftSlate {
+    Stop-ByScript $Pyw
+}
+
+function Stop-OldSwiftSlate {
+    Stop-ByScript (Join-Path $OldAppDir 'SwiftSlate.pyw')
 }
 
 function Protect-File([string]$Path) {
@@ -117,7 +136,7 @@ if ($Uninstall) {
     Stop-SwiftSlate
     Remove-Item $Lnk -Force -EA SilentlyContinue
     Remove-Item $Base -Recurse -Force -EA SilentlyContinue
-    Write-Host "SwiftSlate entfernt ($Base, Autostart Verknuepfung)."
+    Write-Host "$AppName entfernt ($Base, Autostart Verknuepfung)."
     return
 }
 
@@ -142,8 +161,28 @@ if (-not (Test-Path $pythonw)) {
 
 # --- 2) Programmdateien vom Release Tag laden und Hash pruefen ---
 Stop-SwiftSlate
-Install-VerifiedFile 'SwiftSlate.pyw' $Pyw | Out-Null
+Install-VerifiedFile "$AppName.pyw" $Pyw | Out-Null
 Install-VerifiedFile 'assets/icon.ico' (Join-Path $AssetsDir 'icon.ico') | Out-Null
+
+# --- 2b) Alte Installation uebernehmen (nur fehlende Dateien kopieren) ---
+if (Test-Path $OldAppDir) {
+    Write-Host "Alte Installation gefunden: $OldBase"
+    Stop-OldSwiftSlate
+    foreach ($name in 'config.json', 'commands.json') {
+        $src = Join-Path $OldAppDir $name
+        $dst = Join-Path $AppDir $name
+        if ((Test-Path $src) -and -not (Test-Path $dst)) {
+            Copy-Item $src $dst
+            Write-Host "$name aus alter Installation uebernommen."
+        } elseif (Test-Path $src) {
+            Write-Host "$name existiert schon in $AppDir, alte Datei nicht kopiert."
+        }
+    }
+    if (Test-Path $OldLnk) {
+        Remove-Item $OldLnk -Force -EA SilentlyContinue
+        Write-Host "Alte Autostart Verknuepfung entfernt: $OldLnk"
+    }
+}
 
 # --- 3) commands.json (nur wenn fehlend oder -ResetCommands) ---
 if ($ResetCommands -or -not (Test-Path $CmdPath)) {
@@ -218,7 +257,7 @@ if ($NoAutostart) {
     $sc.TargetPath       = $pythonw
     $sc.Arguments        = "`"$Pyw`""
     $sc.WorkingDirectory = $AppDir
-    $sc.Description      = 'SwiftSlate Desktop'
+    $sc.Description      = $AppName
     $sc.Save()
     Write-Host "Autostart: $Lnk"
 }
@@ -227,5 +266,12 @@ if ($NoAutostart) {
 if (-not $NoStart) {
     Stop-SwiftSlate
     Start-Process -FilePath $pythonw -ArgumentList "`"$Pyw`"" -WorkingDirectory $AppDir
-    Write-Host 'SwiftSlate laeuft (Tray Symbol). Test: in Notepad "ich hab das vergesen .fix" tippen und 1 Sekunde warten.'
+    Write-Host "$AppName laeuft (Tray Symbol). Klick auf das Symbol oeffnet die Einstellungen, Rechtsklick das Menue."
+    Write-Host 'Test: in Notepad "ich hab das vergesen .fix" tippen und 1 Sekunde warten.'
+}
+
+if (Test-Path $OldBase) {
+    Write-Host ''
+    Write-Host "Hinweis: Der alte Ordner $OldBase wurde NICHT geloescht."
+    Write-Host 'Wenn alles laeuft, kannst du ihn selbst loeschen (enthaelt einen alten API Key in config.json).'
 }

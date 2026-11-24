@@ -2,11 +2,11 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in SwiftSlate Desktop, please report it privately:
+If you discover a security vulnerability in SwiftSlateJMKEdition, please report it privately:
 
 **Email:** me@musheer360.com
 
-**Subject line:** `[SwiftSlate Desktop Security] Brief description`
+**Subject line:** `[SwiftSlateJMKEdition Security] Brief description`
 
 Please include:
 - Description of the vulnerability

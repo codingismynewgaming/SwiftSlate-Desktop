@@ -23,7 +23,7 @@
 
 ## Checklist
 
-- [ ] Python syntax check passes (`python -c "import py_compile; py_compile.compile('SwiftSlate.pyw', doraise=True)"`)
+- [ ] Python syntax check passes (`python -c "import py_compile; py_compile.compile('SwiftSlateJMKEdition.pyw', doraise=True)"`)
 - [ ] No hardcoded API keys or secrets
 - [ ] Works with system Python 3.10+ incl. tkinter
 - [ ] Follows existing code style

@@ -1,32 +1,32 @@
-# Contributing to SwiftSlate Desktop
+# Contributing to SwiftSlateJMKEdition
 
 Thanks for wanting to contribute! Here's everything you need to know.
 
 ## Project Philosophy
 
 - **Zero external dependencies** — uses only Python standard library and Windows APIs via ctypes
-- **Single file** — the entire app is one `SwiftSlate.pyw` file, keep it that way
+- **Single file** — the entire app is one `SwiftSlateJMKEdition.pyw` file, keep it that way
 - **Lightweight** — blocking message loop with zero CPU when idle
 - **Privacy first** — no analytics, no telemetry, no data leaves the machine except to the user's configured AI provider (and the built-in `?ip` command, which contacts ifconfig.me)
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/SwiftSlate-Desktop.git
-cd SwiftSlate-Desktop
+git clone https://github.com/YOUR_USERNAME/SwiftSlateJMKEdition.git
+cd SwiftSlateJMKEdition
 ```
 
 Run directly on Windows with Python 3.10+:
 
 ```powershell
-python SwiftSlate.pyw --debug
+python SwiftSlateJMKEdition.pyw --debug
 ```
 
 Debug mode runs in the foreground with full logging.
 
 ### Installer hash pins (one-time setup)
 
-`install.ps1` pins the SHA-256 of `SwiftSlate.pyw` and `commands.json`, and CI fails
+`install/Install-SwiftSlateJMKEdition.ps1` pins the SHA-256 of `SwiftSlateJMKEdition.pyw` and `commands.json`, and CI fails
 the build if a pin goes stale. A pre-commit hook keeps the pins in sync automatically,
 so you never touch hashes manually:
 
@@ -34,7 +34,7 @@ so you never touch hashes manually:
 git config core.hooksPath .githooks
 ```
 
-After that, commits just work — the hook updates the pin in `install.ps1` and stages it
+After that, commits just work — the hook updates the pin in `install/Install-SwiftSlateJMKEdition.ps1` and stages it
 whenever either file changes.
 
 ## What You Can Contribute
@@ -49,7 +49,7 @@ whenever either file changes.
 
 ## Architecture Overview
 
-Everything lives in `SwiftSlate.pyw`:
+Everything lives in `SwiftSlateJMKEdition.pyw`:
 
 ```
 Win32 API declarations    → ctypes signatures for Raw Input, clipboard, SendInput
@@ -73,7 +73,7 @@ There's a small pure-logic regression suite in `tests/` (run with
 `python -m unittest discover -s tests -v`), plus CI (syntax check, pyflakes, ruff).
 Most behavior is Windows-only, so manual testing is critical:
 
-1. **Run in debug mode** — `python SwiftSlate.pyw --debug`
+1. **Run in debug mode** — `python SwiftSlateJMKEdition.pyw --debug`
 2. **Test trigger detection** — type triggers in Notepad, browser, VS Code, Teams
 3. **Test both command types** — AI commands (need API key) and text replacer (offline)
 4. **Check the undo command** — `?undo` should restore previous text
@@ -93,7 +93,7 @@ Most behavior is Windows-only, so manual testing is critical:
 1. Fork and create a branch: `feature/your-thing` or `fix/the-bug`
 2. Make your changes
 3. Test on a real Windows machine (not WSL)
-4. Verify syntax: `python -c "import py_compile; py_compile.compile('SwiftSlate.pyw', doraise=True)"`
+4. Verify syntax: `python -c "import py_compile; py_compile.compile('SwiftSlateJMKEdition.pyw', doraise=True)"`
 5. Open a PR against `master` — fill in the template
 
 ## What I Won't Merge

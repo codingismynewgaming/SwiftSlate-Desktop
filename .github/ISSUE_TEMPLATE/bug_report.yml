@@ -1,5 +1,5 @@
 name: Bug Report
-description: Something isn't working as expected in SwiftSlate Desktop
+description: Something isn't working as expected in SwiftSlateJMKEdition
 labels: ["bug"]
 body:
   - type: markdown

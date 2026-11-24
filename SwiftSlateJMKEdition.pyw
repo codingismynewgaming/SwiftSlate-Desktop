@@ -1,8 +1,8 @@
 """
-SwiftSlate Desktop
+SwiftSlateJMKEdition
 System-wide AI text transformation
-https://github.com/codingismynewgaming/SwiftSlate-Desktop
-Fork of https://github.com/Musheer360/SwiftSlate-Desktop
+https://github.com/codingismynewgaming/SwiftSlateJMKEdition
+Fork of https://github.com/Musheer360/SwiftSlate-Desktop (MIT License)
 """
 
 import collections
@@ -21,6 +21,9 @@ import http.client
 import urllib.request
 import urllib.error
 import urllib.parse
+
+APP_NAME = "SwiftSlateJMKEdition"
+APP_VERSION = "1.1.0"
 
 # --- Win32 constants ---
 WM_INPUT = 0x00FF
@@ -53,8 +56,14 @@ NIIF_ERROR = 0x00000003
 NIIF_NOSOUND = 0x00000010
 NOTIFYICON_VERSION_4 = 4
 WM_TRAYICON = 0x8001
+WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONUP = 0x0205
+WM_CONTEXTMENU = 0x007B
+NIN_SELECT = 0x0400
+NIN_KEYSELECT = 0x0401
+ASFW_ANY = 0xFFFFFFFF
+SETTINGS_CHECK_TIMER_ID = 2
 TPM_RETURNCMD = 0x0100
 TPM_RIGHTBUTTON = 0x0002
 MF_STRING = 0x0000
@@ -104,6 +113,14 @@ user32.EnumClipboardFormats.argtypes = [wt.UINT]
 user32.EnumClipboardFormats.restype = wt.UINT
 user32.SetForegroundWindow.argtypes = [wt.HWND]
 user32.SetForegroundWindow.restype = wt.BOOL
+user32.AllowSetForegroundWindow.argtypes = [wt.DWORD]
+user32.AllowSetForegroundWindow.restype = wt.BOOL
+user32.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
+user32.FindWindowW.restype = wt.HWND
+user32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+user32.ShowWindow.restype = wt.BOOL
+user32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+user32.PostMessageW.restype = wt.BOOL
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
 user32.GetCursorPos.restype = wt.BOOL
 user32.CreatePopupMenu.restype = wt.HANDLE
@@ -626,7 +643,7 @@ def _fetch_gemini_models(key):
         url = f"https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000{suffix}"
         req = urllib.request.Request(url, headers={
             "x-goog-api-key": key,
-            "User-Agent": "SwiftSlate/1.0",
+            "User-Agent": f"{APP_NAME}/{APP_VERSION}",
         }, method="GET")
         try:
             with _secure_opener.open(req, timeout=15) as resp:
@@ -651,7 +668,7 @@ def _fetch_groq_models(key):
     url = "https://api.groq.com/openai/v1/models"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {key}",
-        "User-Agent": "SwiftSlate/1.0",
+        "User-Agent": f"{APP_NAME}/{APP_VERSION}",
     }, method="GET")
     try:
         with _secure_opener.open(req, timeout=15) as resp:
@@ -729,6 +746,7 @@ cf_no_cloud = 0
 
 # Notification state
 _notify_icon_added = False
+_tray_version_4 = False
 _NOTIFY_ID = 1001
 
 # --- Debug & Logging ---
@@ -748,6 +766,42 @@ def log(msg):
         except (OSError, ValueError):
             pass
 
+def log_error(msg):
+    """Log and also append to debug.log next to the script, even without --debug.
+    Never pass keys or config contents here."""
+    log(msg)
+    if log_file:
+        return
+    try:
+        path = os.path.join(script_dir, "debug.log")
+        if os.path.isfile(path) and os.path.getsize(path) > 512 * 1024:
+            os.replace(path, path + ".old")
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except OSError:
+        pass
+
+def tray_event_action(lparam, version4):
+    """Map a WM_TRAYICON lParam to "menu", "settings" or None.
+
+    NOTIFYICON_VERSION_4 packs the event into LOWORD(lParam) and the icon id into
+    HIWORD, and sends WM_CONTEXTMENU / NIN_SELECT instead of relying on raw mouse
+    messages. Comparing the whole lParam to WM_RBUTTONUP (as v1.0.0 did) never matched.
+    """
+    event = int(lparam) & 0xFFFF
+    if version4:
+        if event == WM_CONTEXTMENU:
+            return "menu"
+        if event in (NIN_SELECT, NIN_KEYSELECT, WM_LBUTTONDBLCLK):
+            return "settings"
+        return None
+    if event == WM_RBUTTONUP:
+        return "menu"
+    if event in (WM_LBUTTONUP, WM_LBUTTONDBLCLK):
+        return "settings"
+    return None
+
 # --- Notifications ---
 def _load_app_icon(size):
     """Load custom icon from assets/icon.ico at `size`, falling back to IDI_APPLICATION."""
@@ -761,7 +815,7 @@ def _load_app_icon(size):
 
 def _ensure_notify_icon():
     """Add the notification tray icon if not already present."""
-    global _notify_icon_added
+    global _notify_icon_added, _tray_version_4
     if _notify_icon_added or not hwnd_main:
         return _notify_icon_added
 
@@ -773,13 +827,17 @@ def _ensure_notify_icon():
     nid.uCallbackMessage = WM_TRAYICON
     icon_size = user32.GetSystemMetrics(SM_CXSMICON) or 16
     nid.hIcon = _load_app_icon(icon_size)
-    nid.szTip = "SwiftSlate Desktop"
+    nid.szTip = f"{APP_NAME} (Klick: Einstellungen)"
 
     if shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
         nid.uVersion = NOTIFYICON_VERSION_4
-        shell32.Shell_NotifyIconW(NIM_SETVERSION, ctypes.byref(nid))
+        # With NOTIFYICON_VERSION_4 the callback lParam is MAKELPARAM(event, uID), not the
+        # bare mouse message. wnd_proc decodes it via tray_event_action().
+        _tray_version_4 = bool(shell32.Shell_NotifyIconW(NIM_SETVERSION, ctypes.byref(nid)))
+        log(f"Tray icon added (version 4: {_tray_version_4})")
         _notify_icon_added = True
         return True
+    log("Tray icon could not be added")
     return False
 
 def notify(title, message, icon=NIIF_INFO):
@@ -849,7 +907,7 @@ def _notify_debounced(message, icon=NIIF_INFO):
     if icon in (NIIF_ERROR, NIIF_WARNING):
         _last_error_notify_time = now
         _last_error_notify_msg = message
-    notify("SwiftSlate", message, icon)
+    notify(APP_NAME, message, icon)
 
 # --- Load config ---
 def ready_after_failed_load(was_ready, initial):
@@ -913,12 +971,12 @@ def load_config(initial=False):
     except (json.JSONDecodeError, ValueError) as e:
         log(f"ERROR: config.json parse error: {e}")
         if hwnd_main and not config_ready:
-            notify("SwiftSlate", f"config.json parse error: {e}", NIIF_ERROR)
+            notify(APP_NAME, f"config.json parse error: {e}", NIIF_ERROR)
         return _config_load_failed(f"JSON Fehler ({e}).", initial)
     except OSError as e:
         log(f"ERROR: Cannot read config.json: {e}")
         if hwnd_main and not config_ready:
-            notify("SwiftSlate", f"Cannot read config.json: {e}", NIIF_ERROR)
+            notify(APP_NAME, f"Cannot read config.json: {e}", NIIF_ERROR)
         return _config_load_failed("Datei nicht lesbar.", initial)
 
     prob = config_problem(new_config)
@@ -975,7 +1033,7 @@ def load_config(initial=False):
         host = custom_endpoint[7:].split("/")[0].split(":")[0].lower()
         if host not in ("localhost", "127.0.0.1", "::1"):
             log("WARNING: Custom endpoint uses plaintext HTTP - API key sent unencrypted")
-            notify("SwiftSlate", "Endpoint uses HTTP, not HTTPS. API key is sent unencrypted.", NIIF_WARNING)
+            notify(APP_NAME, "Endpoint uses HTTP, not HTTPS. API key is sent unencrypted.", NIIF_WARNING)
 
     # Coerce the model to one the ACTIVE provider actually offers. Mirrors Android's
     # GroqModels.sanitize()/GeminiModels.sanitize(): a known-retired id always migrates
@@ -990,11 +1048,11 @@ def load_config(initial=False):
     # Custom endpoints are exempt: their model names are user-defined by design.
     if provider == "groq" and model in GROQ_RETIRED_IDS:
         log(f"WARNING: Retired Groq model '{model}', falling back to {DEFAULT_GROQ_MODEL}")
-        notify("SwiftSlate", f"Model '{model}' has been retired - using {DEFAULT_GROQ_MODEL}.", NIIF_WARNING)
+        notify(APP_NAME, f"Model '{model}' has been retired - using {DEFAULT_GROQ_MODEL}.", NIIF_WARNING)
         model = DEFAULT_GROQ_MODEL
     elif provider == "gemini" and model in GEMINI_RETIRED_IDS:
         log(f"WARNING: Retired Gemini model '{model}', falling back to {DEFAULT_GEMINI_MODEL}")
-        notify("SwiftSlate", f"Model '{model}' has been retired - using {DEFAULT_GEMINI_MODEL}.", NIIF_WARNING)
+        notify(APP_NAME, f"Model '{model}' has been retired - using {DEFAULT_GEMINI_MODEL}.", NIIF_WARNING)
         model = DEFAULT_GEMINI_MODEL
     elif provider in ("groq", "gemini"):
         curated = GROQ_MODEL_PARAMS if provider == "groq" else GEMINI_MODEL_PARAMS
@@ -1005,7 +1063,7 @@ def load_config(initial=False):
                 log(f"Model '{model}' not curated but found in live {provider} catalog - using as-is")
             else:
                 log(f"WARNING: Unknown {provider} model '{model}', falling back to {default_for_provider}")
-                notify("SwiftSlate", f"Unknown model '{model}' - using {default_for_provider}.", NIIF_WARNING)
+                notify(APP_NAME, f"Unknown model '{model}' - using {default_for_provider}.", NIIF_WARNING)
                 model = default_for_provider
 
     # Load commands into FRESH containers, then atomically swap the global
@@ -1047,7 +1105,7 @@ def load_config(initial=False):
                 }
         except (json.JSONDecodeError, ValueError) as e:
             log(f"WARNING: commands.json parse error: {e}")
-            notify("SwiftSlate", f"commands.json parse error: {e}", NIIF_WARNING)
+            notify(APP_NAME, f"commands.json parse error: {e}", NIIF_WARNING)
         except OSError as e:
             log(f"WARNING: Cannot read commands.json: {e}")
 
@@ -1088,7 +1146,7 @@ def load_config(initial=False):
         extra = f" (+{len(shadowed)-1} more)" if len(shadowed) > 1 else ""
         for a2, b2 in shadowed:
             log(f"WARNING: trigger '{a2}' is a prefix of '{b2}' — '{b2}' will never fire")
-        notify("SwiftSlate", f"Trigger '{a}' shadows '{b}' — the shorter one always fires first.{extra}", NIIF_WARNING)
+        notify(APP_NAME, f"Trigger '{a}' shadows '{b}' — the shorter one always fires first.{extra}", NIIF_WARNING)
     # Buffer only needs to hold the longest trigger (+ margin for translate:XXXXX).
     # Smaller buffer = less sensitive typed data held in memory at any time.
     longest_trigger = max((len(f) for f in new_trigger_strings.values()), default=20)
@@ -1101,7 +1159,7 @@ def load_config(initial=False):
     was_ready = config_ready
     config_ready = True
     if not was_ready and hwnd_main:
-        notify("SwiftSlate", "SwiftSlate ist bereit.", NIIF_INFO)
+        notify(APP_NAME, f"{APP_NAME} ist bereit.", NIIF_INFO)
     return True
 
 # --- Hot reload: watch config files for changes ---
@@ -1627,7 +1685,7 @@ def _call_gemini(text, system_content, key):
     req = urllib.request.Request(url, data=body, headers={
         "Content-Type": "application/json",
         "x-goog-api-key": key,
-        "User-Agent": "SwiftSlate/1.0",
+        "User-Agent": f"{APP_NAME}/{APP_VERSION}",
     }, method="POST")
 
     # Let exceptions propagate to call_api retry loop
@@ -1698,7 +1756,7 @@ def _call_openai_compatible(text, system_content, key, endpoint):
 
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "SwiftSlate/1.0",
+        "User-Agent": f"{APP_NAME}/{APP_VERSION}",
     }
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -2802,27 +2860,75 @@ def _process_keystroke_inner(vkey, scan_code):
             handle_trigger(best_trigger)
 
 _settings_proc = None
+SETTINGS_TITLE = f"{APP_NAME} – Einstellungen"
+
+def _settings_python():
+    """Interpreter for the settings process: pythonw.exe next to sys.executable if present,
+    so no console window flashes and the venv stays the same."""
+    exe = os.path.abspath(sys.executable or "")
+    folder, name = os.path.split(exe)
+    if name.lower() == "python.exe":
+        candidate = os.path.join(folder, "pythonw.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return exe
 
 def _open_settings_window():
     """Launch the tkinter settings window in a separate process (if not already open)."""
     global _settings_proc
     if _settings_proc is not None and _settings_proc.poll() is None:
+        log("Settings window already open")
+        _focus_settings_window()
         return
+    # Let the new process take the foreground; otherwise Windows may open the
+    # window behind others because the tray click gave the focus to us.
+    try:
+        user32.AllowSetForegroundWindow(ASFW_ANY)
+    except Exception:
+        pass
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         _settings_proc = subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "--settings"],
+            [_settings_python(), os.path.abspath(__file__), "--settings"],
             cwd=script_dir,
             creationflags=flags,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
+        log(f"Settings window started (pid {_settings_proc.pid})")
+        if hwnd_main:
+            user32.SetTimer(hwnd_main, SETTINGS_CHECK_TIMER_ID, 4000, None)
     except Exception as e:
-        log(f"Failed to open settings window: {e}")
+        _settings_proc = None
+        log_error(f"Einstellungen konnten nicht geöffnet werden: {type(e).__name__}: {e}")
+        notify(APP_NAME, "Einstellungen konnten nicht geöffnet werden. Details in debug.log.", NIIF_ERROR)
+
+def _check_settings_process():
+    """Called once a few seconds after launch: report a settings process that died early."""
+    proc = _settings_proc
+    if proc is None:
+        return
+    code = proc.poll()
+    if code not in (None, 0):
+        log_error(f"Einstellungsfenster wurde mit Code {code} beendet.")
+        notify(APP_NAME, "Einstellungsfenster ist abgestürzt. Details in debug.log.", NIIF_ERROR)
+
+def _focus_settings_window():
+    """Bring an already open settings window to the front."""
+    try:
+        hwnd = user32.FindWindowW(None, SETTINGS_TITLE)
+        if hwnd:
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
+    except Exception as e:
+        log(f"Could not focus settings window: {e}")
 
 def _get_startup_shortcut_path():
     appdata = os.environ.get("APPDATA", "")
     if not appdata:
         return ""
-    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "SwiftSlate.lnk")
+    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", f"{APP_NAME}.lnk")
 
 def _set_autostart(enabled):
     lnk_path = _get_startup_shortcut_path()
@@ -2859,6 +2965,18 @@ def _set_autostart(enabled):
     )
 
 def run_settings_window():
+    """Run the settings window; write any crash to debug.log and show a message box."""
+    try:
+        _run_settings_window()
+    except Exception as e:
+        log_error(f"Einstellungsfenster Fehler: {type(e).__name__}: {e}")
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                None, f"Einstellungsfenster konnte nicht starten:\n{type(e).__name__}: {e}", APP_NAME, 0x10)
+        except Exception:
+            pass
+
+def _run_settings_window():
     """Run the standalone tkinter settings window (--settings)."""
     try:
         import tkinter as tk
@@ -2867,7 +2985,7 @@ def run_settings_window():
         ctypes.windll.user32.MessageBoxW(
             None,
             "Für das Einstellungsfenster fehlt tkinter. Bitte Python von python.org mit Tcl/Tk installieren.",
-            "SwiftSlate",
+            APP_NAME,
             0x10,
         )
         return
@@ -2889,7 +3007,8 @@ def run_settings_window():
     stored_keys = list(raw_cfg.get("api_keys") or []) if isinstance(raw_cfg.get("api_keys"), list) else []
 
     root = tk.Tk()
-    root.title("SwiftSlate – Einstellungen")
+    root.withdraw()  # build the widgets hidden, then show once (faster, no flicker)
+    root.title(SETTINGS_TITLE)
     root.resizable(True, False)
     try:
         root.iconbitmap(os.path.join(script_dir, "assets", "icon.ico"))
@@ -3336,6 +3455,18 @@ def run_settings_window():
     ttk.Button(btn_frame, text="Schließen", command=_close).pack(side="right", padx=(6, 0))
     ttk.Button(btn_frame, text="Speichern", command=_save).pack(side="right")
     root.protocol("WM_DELETE_WINDOW", _close)
+
+    # Show in front: started from the tray, the window would otherwise often open
+    # behind the active window and look like "nothing happened".
+    root.update_idletasks()
+    root.deiconify()
+    root.lift()
+    try:
+        root.attributes("-topmost", True)
+        root.after(400, lambda: root.attributes("-topmost", False))
+    except Exception:
+        pass
+    root.focus_force()
     root.mainloop()
 
 # --- Window procedure ---
@@ -3376,8 +3507,13 @@ def wnd_proc(hwnd, msg, wparam, lparam):
                     keystroke_buffer.clear()
                     handle_trigger(name)
 
+        elif msg == WM_TIMER and wparam == SETTINGS_CHECK_TIMER_ID:
+            user32.KillTimer(hwnd, SETTINGS_CHECK_TIMER_ID)
+            _check_settings_process()
+
         elif msg == WM_TRAYICON:
-            if lparam == WM_RBUTTONUP:
+            action = tray_event_action(lparam, _tray_version_4)
+            if action == "menu":
                 # Context menu with Settings and Exit. SetForegroundWindow is
                 # required for the menu to dismiss when the user clicks elsewhere.
                 user32.SetForegroundWindow(hwnd)
@@ -3391,12 +3527,15 @@ def wnd_proc(hwnd, msg, wparam, lparam):
                     cmd = user32.TrackPopupMenu(hmenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                                 pt.x, pt.y, 0, hwnd, None)
                     user32.DestroyMenu(hmenu)
+                    user32.PostMessageW(hwnd, 0, 0, 0)  # WM_NULL, see TrackPopupMenu docs
+                    log(f"Tray menu result: {cmd}")
                     if cmd == MENU_ID_SETTINGS:
                         _open_settings_window()
                     elif cmd == MENU_ID_EXIT:
                         log("Exit requested from tray menu")
                         user32.DestroyWindow(hwnd)  # WM_DESTROY -> PostQuitMessage
-            elif lparam == WM_LBUTTONDBLCLK:
+            elif action == "settings":
+                log("Tray click: open settings")
                 _open_settings_window()
 
         elif msg == WM_DESTROY:
@@ -3406,7 +3545,7 @@ def wnd_proc(hwnd, msg, wparam, lparam):
             _notify_icon_added = False
             _ensure_notify_icon()
     except Exception as e:
-        log(f"ERROR in wnd_proc: {e}")
+        log_error(f"ERROR in wnd_proc: {type(e).__name__}: {e}")
 
     return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
@@ -3447,9 +3586,9 @@ def main():
     if not acquire_singleton():
         log("Another instance is already running. Exiting.")
         if debug_mode:
-            print("  Another SwiftSlate instance is already running.")
+            print(f"  {APP_NAME} läuft bereits.")
         # Can't use notify() here — no hwnd_main yet, and the other instance owns the tray icon
-        ctypes.windll.user32.MessageBoxW(None, "Another SwiftSlate instance is already running.", "SwiftSlate", 0x30)
+        ctypes.windll.user32.MessageBoxW(None, f"{APP_NAME} läuft bereits.", APP_NAME, 0x30)
         return
 
     load_config(initial=True)
@@ -3467,7 +3606,7 @@ def main():
     wnd_proc_cb = WNDPROC(wnd_proc)
 
     hinstance = kernel32.GetModuleHandleW(None)
-    class_name = "SwiftSlateDesktop"
+    class_name = APP_NAME
 
     wc = WNDCLASSEXW()
     wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
@@ -3484,12 +3623,12 @@ def main():
         # not exist yet at this point.
         log("Failed to register window class")
         ctypes.windll.user32.MessageBoxW(
-            None, "SwiftSlate could not start: failed to register its window class.", "SwiftSlate", 0x10)
+            None, f"{APP_NAME} could not start: failed to register its window class.", APP_NAME, 0x10)
         return
 
     # Create hidden window
     hwnd_main = user32.CreateWindowExW(
-        0, class_name, "SwiftSlate", WS_OVERLAPPEDWINDOW,
+        0, class_name, APP_NAME, WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 1, 1,
         None, None, hinstance, None
     )
@@ -3497,7 +3636,7 @@ def main():
     if not hwnd_main:
         log("Failed to create window")
         ctypes.windll.user32.MessageBoxW(
-            None, "SwiftSlate could not start: failed to create its message window.", "SwiftSlate", 0x10)
+            None, f"{APP_NAME} could not start: failed to create its message window.", APP_NAME, 0x10)
         return
 
     _ensure_notify_icon()
@@ -3513,20 +3652,20 @@ def main():
         log("Failed to register Raw Input")
         ctypes.windll.user32.MessageBoxW(
             None,
-            "SwiftSlate could not start: keyboard input registration failed.\n\n"
+            f"{APP_NAME} could not start: keyboard input registration failed.\n\n"
             "Another program may already be capturing keyboard input. Close it and try again.",
-            "SwiftSlate", 0x10)
+            APP_NAME, 0x10)
         return
 
     log("Raw Input registered")
-    log(f"SwiftSlate Desktop running ({provider}, {model})")
+    log(f"{APP_NAME} {APP_VERSION} running ({provider}, {model})")
 
     if not config_ready:
-        notify("SwiftSlate", "SwiftSlate ist noch nicht eingerichtet. Einstellungen werden geöffnet.", NIIF_INFO)
+        notify(APP_NAME, f"{APP_NAME} ist noch nicht eingerichtet. Einstellungen werden geöffnet.", NIIF_INFO)
         _open_settings_window()
 
     if debug_mode:
-        print("  SwiftSlate Desktop running")
+        print(f"  {APP_NAME} running")
         print("  Type a trigger anywhere to transform text.")
         print()
 
