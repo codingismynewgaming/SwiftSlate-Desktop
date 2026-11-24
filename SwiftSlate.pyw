@@ -244,6 +244,7 @@ class WNDCLASSEXW(ctypes.Structure):
 # --- Globals ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 config = {}
+config_ready = False
 commands = {}
 api_keys = []
 model = ""
@@ -479,6 +480,28 @@ def find_command_prefix_warnings(entries, prefix=".") -> list[str]:
             if b.startswith(a):
                 warnings.append(f"{prefix}{a} ist Anfang von {prefix}{b}. Mit Tipp Pause 0 feuert immer der kürzere.")
     return warnings
+
+def config_problem(config_dict):
+    """Return a German problem description if config_dict is incomplete/invalid, or None if ready."""
+    if not isinstance(config_dict, dict):
+        return "config.json ist ungültig."
+    prov = config_dict.get("provider", "custom")
+    if prov not in ("custom", "gemini", "groq"):
+        return "Ungültiger Anbieter."
+    if prov == "custom":
+        ep = config_dict.get("endpoint", "")
+        if not isinstance(ep, str) or not ep.strip():
+            return "Endpoint fehlt."
+        if not ep.strip().startswith(("http://", "https://")):
+            return "Endpoint muss mit http:// oder https:// beginnen."
+    mdl = config_dict.get("model", "")
+    if not isinstance(mdl, str) or not mdl.strip():
+        return "Modell fehlt."
+    keys = config_dict.get("api_keys", [])
+    valid_keys = [k for k in keys if isinstance(k, str) and k.strip()] if isinstance(keys, list) else []
+    if prov in ("gemini", "groq") and not valid_keys:
+        return "API Key fehlt."
+    return None
 
 def strip_markdown_fences(text):
     """Strip markdown code fences from API response if present.
@@ -803,16 +826,31 @@ def _notify_debounced(message, icon=NIIF_INFO):
 
 # --- Load config ---
 def load_config():
-    global config, commands, api_keys, model, prefix, translate_prefix
+    global config, config_ready, commands, api_keys, model, prefix, translate_prefix
     global trigger_strings, trigger_last_chars, max_buffer_len, keystroke_buffer
     global provider, temperature, custom_endpoint, key_delay, trigger_delay, spinner_mode
 
     config_path = os.path.join(script_dir, "config.json")
 
-    # Check config file exists
+    # Create default config.json on first run if missing
     if not os.path.exists(config_path):
-        log("ERROR: config.json not found")
-        notify("SwiftSlate", "config.json not found. Create it in .swiftslate folder.", NIIF_ERROR)
+        default_cfg = {
+            "api_keys": [],
+            "provider": "custom",
+            "endpoint": "",
+            "model": "",
+            "temperature": 0.3,
+            "prefix": ".",
+            "trigger_delay_ms": 1000,
+            "key_delay": 200,
+            "spinner": "animated",
+        }
+        try:
+            write_json_atomic(config_path, default_cfg)
+            log("Created initial config.json")
+        except Exception as e:
+            log(f"ERROR: Cannot create config.json: {e}")
+        config_ready = False
         return False
 
     # Parse config JSON
@@ -821,59 +859,36 @@ def load_config():
             config = json.load(f)
     except (json.JSONDecodeError, ValueError) as e:
         log(f"ERROR: config.json parse error: {e}")
-        notify("SwiftSlate", f"config.json parse error: {e}", NIIF_ERROR)
+        if hwnd_main:
+            notify("SwiftSlate", f"config.json parse error: {e}", NIIF_ERROR)
+        config_ready = False
         return False
     except OSError as e:
         log(f"ERROR: Cannot read config.json: {e}")
-        notify("SwiftSlate", f"Cannot read config.json: {e}", NIIF_ERROR)
+        if hwnd_main:
+            notify("SwiftSlate", f"Cannot read config.json: {e}", NIIF_ERROR)
+        config_ready = False
         return False
 
-    # Validate the keys BEFORE publishing anything into the globals. This was the only
-    # failure path that returned late, and it ran after api_keys/provider/model/prefix/
-    # temperature/endpoint/key_delay/spinner had already been assigned — so saving a config
-    # with broken api_keys left the app running with api_keys == [] while the watcher logged
-    # "kept previous state", and every later transform then failed for a wrong stated reason.
-    if not isinstance(config, dict):
-        # A valid JSON document that isn't an object ([...], "str", 42, null) would otherwise
-        # raise AttributeError on the .get() below — caught by neither except clause above, so
-        # the process died silently under pythonw at startup.
-        log("ERROR: config.json must contain a JSON object")
-        notify("SwiftSlate", "config.json must contain a JSON object.", NIIF_ERROR)
+    prob = config_problem(config)
+    if prob:
+        log(f"Config not ready: {prob}")
+        config_ready = False
         return False
 
     parsed_keys = config.get("api_keys", [])
     if not isinstance(parsed_keys, list):
-        # A string here would be iterated character-by-character downstream
-        log("ERROR: api_keys in config.json must be a list")
         parsed_keys = []
     parsed_keys = [k for k in parsed_keys if isinstance(k, str) and k.strip()]
-    if not parsed_keys:
-        log("ERROR: No valid API keys in config.json")
-        notify("SwiftSlate", "No valid API keys in config.json.", NIIF_ERROR)
-        if debug_mode:
-            print("  Error: No API keys configured. Edit config.json.")
-        return False
 
     api_keys = parsed_keys
     provider = config.get("provider", "gemini")
-    # Membership must be checked BEFORE default_model is derived from it: a typo'd or
-    # differently-cased provider ("Gemini", "gemeni") otherwise falls through to the
-    # Groq default model while provider is later coerced to gemini, so every request
-    # sends a Groq model id to Gemini and fails.
-    if provider not in ("groq", "gemini", "custom"):
-        log(f"WARNING: Unknown provider '{provider}', defaulting to gemini")
-        provider = "gemini"
     default_model = DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_GROQ_MODEL
     model = config.get("model", default_model)
-    if not isinstance(model, str) or not model.strip():
-        log(f"WARNING: Invalid model value, defaulting to {default_model}")
-        model = default_model
     prefix = config.get("prefix", ".")
     temperature = config.get("temperature", 0.5)
     custom_endpoint = config.get("endpoint", "")
     if not isinstance(custom_endpoint, str):
-        # A non-string endpoint would crash .startswith() validation below
-        log("WARNING: Invalid endpoint value, ignoring")
         custom_endpoint = ""
 
     # Validate prefix (must happen before translate_prefix is computed)
@@ -883,10 +898,6 @@ def load_config():
         prefix = "."
     translate_prefix = prefix + "translate:"
 
-    # Validate temperature. json.load accepts Infinity/NaN and huge int literals, and
-    # float(10**400)/int(inf)/int(nan) raise — an exception here would abort load_config
-    # halfway, leaving some globals published and others stale (e.g. a new prefix live while
-    # trigger_strings still holds the old one), with no notification.
     if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) \
             or not _finite(temperature):
         temperature = 0.5
@@ -908,16 +919,6 @@ def load_config():
     if spinner_mode not in ("animated", "static", "off"):
         log(f"WARNING: Invalid spinner mode '{spinner_mode}', defaulting to animated")
         spinner_mode = "animated"
-
-    if provider == "custom" and not custom_endpoint:
-        log("WARNING: Custom provider but no endpoint set, defaulting to gemini")
-        notify("SwiftSlate", "Custom provider has no endpoint configured - falling back to Gemini.", NIIF_WARNING)
-        provider = "gemini"
-
-    if provider == "custom" and custom_endpoint and not custom_endpoint.startswith(("http://", "https://")):
-        log("WARNING: Custom endpoint must start with http:// or https://")
-        notify("SwiftSlate", "Custom endpoint URL is invalid - falling back to Gemini.", NIIF_ERROR)
-        provider = "gemini"
 
     if provider == "custom" and custom_endpoint.startswith("http://"):
         # Plaintext HTTP is normal for local LLMs; warn only for remote hosts
@@ -1047,6 +1048,10 @@ def load_config():
 
     log(f"Config loaded: model={model}, prefix={prefix}, keys={len(api_keys)}, key_delay={key_delay_ms}ms")
     log(f"Commands loaded: {len(commands)}")
+    was_ready = config_ready
+    config_ready = True
+    if not was_ready and hwnd_main:
+        notify("SwiftSlate", "SwiftSlate ist bereit.", NIIF_INFO)
     return True
 
 # --- Hot reload: watch config files for changes ---
@@ -1296,29 +1301,33 @@ def call_api(text, prompt):
     failure_reason = None
 
     tried_keys = set()
+    keyless_custom = (provider == "custom" and not api_keys)
     for attempt in range(max_attempts):
-        key = get_next_key(tried_keys)
-        if not key:
-            # All keys exhausted
-            if not api_keys:
-                failure_reason = "No API keys configured. Add one to config.json."
-            elif sum(1 for k in api_keys if _is_key_invalid(k)) >= len(api_keys):
-                if len(tried_keys) > 1:
-                    failure_reason = f"All {len(tried_keys)} API keys were rejected by the provider. Check your keys in config.json."
-                elif tried_keys:
-                    last_tried = list(tried_keys)[-1]
-                    hint = f"••••{last_tried[-4:]}" if len(last_tried) >= 4 else "key"
-                    failure_reason = f"API key was rejected by the provider ({hint}). Check your key in config.json."
-                else:
-                    failure_reason = ("All API keys were rejected by the provider. Check your keys, and "
-                                      f"that '{model}' is available to them.")
-            elif any(time.time() <= _rate_limited_keys.get(k, 0) for k in api_keys):
-                failure_reason = "All API keys are rate limited. Wait a moment and try again."
-            elif not failure_reason:
-                failure_reason = "No API key was available for this request."
-            break
+        if keyless_custom:
+            key = None
+        else:
+            key = get_next_key(tried_keys)
+            if not key:
+                # All keys exhausted
+                if not api_keys:
+                    failure_reason = "No API keys configured. Add one to config.json."
+                elif sum(1 for k in api_keys if _is_key_invalid(k)) >= len(api_keys):
+                    if len(tried_keys) > 1:
+                        failure_reason = f"All {len(tried_keys)} API keys were rejected by the provider. Check your keys in config.json."
+                    elif tried_keys:
+                        last_tried = list(tried_keys)[-1]
+                        hint = f"••••{last_tried[-4:]}" if len(last_tried) >= 4 else "key"
+                        failure_reason = f"API key was rejected by the provider ({hint}). Check your key in config.json."
+                    else:
+                        failure_reason = ("All API keys were rejected by the provider. Check your keys, and "
+                                          f"that '{model}' is available to them.")
+                elif any(time.time() <= _rate_limited_keys.get(k, 0) for k in api_keys):
+                    failure_reason = "All API keys are rate limited. Wait a moment and try again."
+                elif not failure_reason:
+                    failure_reason = "No API key was available for this request."
+                break
 
-        tried_keys.add(key)
+            tried_keys.add(key)
         try:
             if provider == "gemini":
                 result = _call_gemini(text, system_content, key)
@@ -1570,11 +1579,14 @@ def _call_openai_compatible(text, system_content, key, endpoint):
 
     body = json.dumps(request_body).encode("utf-8")
 
-    req = urllib.request.Request(url, data=body, headers={
-        "Authorization": f"Bearer {key}",
+    headers = {
         "Content-Type": "application/json",
         "User-Agent": "SwiftSlate/1.0",
-    }, method="POST")
+    }
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 
     # Let exceptions propagate to call_api retry loop
     with _secure_opener.open(req, timeout=45) as resp:
@@ -2492,6 +2504,9 @@ def do_replacer(trigger_name, cmd_type, value):
 # --- Trigger handler ---
 def handle_trigger(trigger_name):
     global processing
+    if not config_ready:
+        log("Trigger ignored: config not ready")
+        return
     # Clear the abort signal BEFORE processing starts. Previously it was
     # cleared inside do_transform after the worker thread spun up, so a user
     # keystroke landing in that window set the event and was then wiped,
@@ -3317,8 +3332,7 @@ def main():
         ctypes.windll.user32.MessageBoxW(None, "Another SwiftSlate instance is already running.", "SwiftSlate", 0x30)
         return
 
-    if not load_config():
-        return
+    load_config()
     _start_file_watcher()
 
     # Register clipboard exclusion formats
@@ -3381,6 +3395,10 @@ def main():
 
     log("Raw Input registered")
     log(f"SwiftSlate Desktop running ({provider}, {model})")
+
+    if not config_ready:
+        notify("SwiftSlate", "SwiftSlate ist noch nicht eingerichtet. Einstellungen werden geöffnet.", NIIF_INFO)
+        _open_settings_window()
 
     if debug_mode:
         print("  SwiftSlate Desktop running")
